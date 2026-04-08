@@ -1,0 +1,158 @@
+[build-system]  # https://docs.astral.sh/uv/concepts/build-backend/
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
+
+[project]  # https://packaging.python.org/en/latest/specifications/pyproject-toml/
+name = "problm-solver"
+version = "0.0.0"
+description = "A python library built on top of llama.cpp which generates and performs statistical analysis on language model outputs."
+readme = "README.md"
+authors = [
+  { name = "Clio", email = "d.k.johnson@lancaster.ac.uk" },
+]
+requires-python = ">=3.13,<4.0"
+dependencies = [
+  "poethepoet (>=0.32.1)",
+]
+
+[project.urls]  # https://packaging.python.org/en/latest/specifications/well-known-project-urls/#well-known-labels
+homepage = "https://github.com/muse-writes/probLM-solver"
+source = "https://github.com/muse-writes/probLM-solver"
+changelog = "https://github.com/muse-writes/probLM-solver/blob/main/CHANGELOG.md"
+releasenotes = "https://github.com/muse-writes/probLM-solver/releases"
+documentation = "https://muse-writes.github.io/probLM-solver"
+issues = "https://github.com/muse-writes/probLM-solver/issues"
+
+[dependency-groups]  # https://docs.astral.sh/uv/concepts/projects/dependencies/#development-dependencies
+dev = [
+  "codespell (>=2.4.1)",
+  "commitizen (>=4.3.0)",
+  "coverage[toml] (>=7.6.10)",
+  "ipykernel (>=6.29.4)",
+  "ipython (>=8.18.0)",
+  "ipywidgets (>=8.1.2)",
+  "mkdocs-material (>=9.5.21)",
+  "pre-commit (>=4.0.1)",
+  "pytest (>=8.3.4)",
+  "pytest-mock (>=3.14.0)",
+  "pytest-xdist (>=3.6.1)",
+  "ruff (>=0.9.2)",
+  "ty (>=0.0.6)",
+  "typeguard (>=4.4.1)",
+]
+
+[tool.codespell]  # https://github.com/codespell-project/codespell
+builtin = "en-GB_to_en-US,clear,code,rare"
+check-filenames = true
+skip = "./*_cache/,./.venv,./reports"
+
+[tool.commitizen]  # https://commitizen-tools.github.io/commitizen/config/
+bump_message = "bump: v$current_version → v$new_version"
+tag_format = "v$version"
+update_changelog_on_bump = true
+version_provider = "uv"
+
+[tool.coverage.report]  # https://coverage.readthedocs.io/en/latest/config.html#report
+fail_under = 50
+precision = 1
+show_missing = true
+skip_covered = true
+
+[tool.coverage.run]  # https://coverage.readthedocs.io/en/latest/config.html#run
+branch = true
+command_line = "--module pytest"
+data_file = "reports/.coverage"
+source = ["src"]
+
+[tool.coverage.xml]  # https://coverage.readthedocs.io/en/latest/config.html#xml
+output = "reports/coverage.xml"
+
+[tool.pytest.ini_options]  # https://docs.pytest.org/en/latest/reference/reference.html#ini-options-ref
+addopts = "--color=yes --doctest-modules --exitfirst --failed-first --strict-config --strict-markers --verbosity=2 --junitxml=reports/pytest.xml"
+filterwarnings = ["error", "ignore::DeprecationWarning"]
+testpaths = ["src", "tests"]
+xfail_strict = true
+
+[tool.ruff]  # https://docs.astral.sh/ruff/settings/
+fix = true
+line-length = 100
+src = ["src", "tests"]
+target-version = "py313"
+
+[tool.ruff.format]
+docstring-code-format = true
+skip-magic-trailing-comma = true
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["CPY", "FIX", "ARG001", "COM812", "D203", "D213", "E501", "PD008", "PD009", "RET504", "S101", "TD003"]
+unfixable = ["ERA001", "F401", "F841", "T201", "T203"]
+
+[tool.ruff.lint.flake8-annotations]
+allow-star-arg-any = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false
+
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 100
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ty.rules]
+unused-ignore-comment = "warn"
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.poe.executor]  # https://github.com/nat-n/poethepoet
+type = "simple"
+
+[tool.poe.tasks]
+
+  [tool.poe.tasks.docs]
+  help = "Build or serve the documentation"
+  shell = """
+    if [ $serve ]
+    then {
+      mkdocs serve
+    } else {
+      mkdocs build
+    } fi
+    """
+
+    [[tool.poe.tasks.docs.args]]
+    help = "Serve the documentation locally with live reload"
+    type = "boolean"
+    name = "serve"
+    options = ["--serve"]
+
+  [tool.poe.tasks.serve]
+  help = "Serve the app"
+
+    [[tool.poe.tasks.serve.sequence]]
+    cmd = "echo 'Serving app (placeholder)...'"
+
+  [tool.poe.tasks.lint]
+  help = "Lint this app"
+  cmd = """
+    pre-commit run
+      --all-files
+      --color always
+    """
+
+  [tool.poe.tasks.test]
+  help = "Test this app"
+
+    [[tool.poe.tasks.test.sequence]]
+    cmd = "coverage run"
+
+    [[tool.poe.tasks.test.sequence]]
+    cmd = "coverage report"
+
+    [[tool.poe.tasks.test.sequence]]
+    cmd = "coverage xml"
