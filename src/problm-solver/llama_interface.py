@@ -3,8 +3,6 @@
 import numpy as np
 from llama_cpp import Llama
 
-MODEL_PATH = ('/home/clio/Documents/Code/Prob_AI_RSE/llama/models/'
-              'NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf')
 
 class ModelInstance():
     """Model class.
@@ -33,20 +31,3 @@ class ModelInstance():
             max_tokens=256,
         )
         return output['choices'][0]['message']['content']
-
-
-# TESTING VIA SCRIPTS
-def test_query_sky() -> str:
-    """Load the local GGUF model and ask why the sky is blue."""
-    llm = Llama(model_path=MODEL_PATH, n_ctx=2048)
-    output = llm.create_chat_completion(
-        messages=[
-            {'role': 'user', 'content': 'Why is the sky blue?'},
-        ],
-        max_tokens=256,
-    )
-    return output['choices'][0]['message']['content']
-
-
-if __name__ == '__main__':
-    print(test_query_sky())
