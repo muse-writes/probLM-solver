@@ -1,16 +1,26 @@
 """Command line interface main loop contained here."""
 
+from os.path import splitext
 from pathlib import Path
+from datetime import datetime
 
 from llama_interface import ModelInstance
+from gen_data import LLMOutputData
 
 MODELS_DIR = Path.home() / '.problm-solver' / 'models'
+DATA_DIR = Path.home() / '.problm-solver' / 'datasets'
 
 
 def ensure_models_dir() -> Path:
     """Create the models directory if it doesn't exist and return its path."""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     return MODELS_DIR
+
+
+def ensure_data_dir() -> Path:
+    """Create the data directory if it doesn't exist and returns its path."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return DATA_DIR
 
 
 def list_models() -> list[Path]:
@@ -51,7 +61,31 @@ def main():
         raise SystemExit(1)
 
     model = ModelInstance(str(model_path), context)
-    print(model.query())
+
+# Data class setup and user input.
+    data = LLMOutputData(model)
+    data_size= int(input('Enter the number of samples to take: ').strip())
+    while not isinstance(data_size, int):
+        data_size = int(input('Please enter an integer: ').strip())
+
+    data.generate(data_size)
+    print('Data generation complete.')
+
+# Handle saving data.
+    timestamp = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+    data_path = DATA_DIR / (
+        splitext(model_path.name)[0] + '_' + timestamp + '.jsonl'
+    )
+    resolved = False
+    while not resolved:
+        response = input(f'Save data to file {data_path}? Y/n : ')
+        if response is None or response.lower() == 'y':
+            ensure_data_dir()
+            data.write(str(data_path))
+            resolved = True
+        elif response.lower() == 'n':
+            print('Aborted saving.')
+            resolved = True
 
 
 if __name__ == '__main__':

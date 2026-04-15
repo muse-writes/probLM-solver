@@ -1,6 +1,8 @@
 """llama.cpp python interface for running local models."""
 
 import numpy as np
+import numpy.typing as npt
+
 from llama_cpp import Llama
 
 
@@ -11,11 +13,11 @@ class ModelInstance():
     def __init__(self, fname: str, context: str) -> None:
         """Init method.
         """
-        self.llm = Llama(model_path=fname, n_ctx=2048)
+        self._llm = Llama(model_path=fname, n_ctx=2048)
         self.context = context
 
 
-    def query_n_times(self, n: int) -> list[str]:
+    def query_n_times(self, n: int) -> npt.NDArray[str]:
         """Queries the LLM with the same context N times, returns the output.
         """
         return np.array([self.query() for _ in range(n)], dtype=str)
@@ -24,10 +26,10 @@ class ModelInstance():
     def query(self) -> str:
         """Queries the LLM once.
         """
-        output = self.llm.create_chat_completion(
+        output = self._llm.create_chat_completion(
             messages=[
                 {'role': 'user', 'content': self.context},
             ],
-            max_tokens=256,
+            max_tokens=512,
         )
         return output['choices'][0]['message']['content']
