@@ -4,6 +4,7 @@ import numpy as np
 import numpy.typing as npt
 
 from llama_cpp import Llama
+from data import LLMOutputData
 
 
 class ModelInstance():
@@ -33,3 +34,10 @@ class ModelInstance():
             max_tokens=512,
         )
         return output['choices'][0]['message']['content']
+
+
+    def generate_data(self, n_samples: int) -> LLMOutputData:
+        """Generates data by querying the LLM n_samples times.
+        """
+        data = self.query_n_times(n_samples)
+        return LLMOutputData(prompt=self.context, data=data)

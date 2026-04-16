@@ -5,10 +5,10 @@ from pathlib import Path
 from datetime import datetime
 
 from llama_interface import ModelInstance
-from gen_data import LLMOutputData
 
-MODELS_DIR = Path.home() / '.problm-solver' / 'models'
-DATA_DIR = Path.home() / '.problm-solver' / 'datasets'
+PROBLM_DIR = Path.home() / '.problm-solver'
+MODELS_DIR = PROBLM_DIR / 'models'
+DATA_DIR = PROBLM_DIR / 'datasets'
 
 
 def ensure_models_dir() -> Path:
@@ -28,7 +28,16 @@ def list_models() -> list[Path]:
     return sorted(MODELS_DIR.glob('*.gguf'))
 
 
-def select_model() -> Path:
+def get_data_path(model_path) -> Path:
+    """Returns a Path variable for data storage.
+    """
+    timestamp = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+    return DATA_DIR / (
+        splitext(model_path.name)[0] + '_' + timestamp + '.jsonl'
+    )
+
+
+def ui_select_model() -> Path:
     """Display available GGUF models and prompt the user to pick one."""
     models = list_models()
 
@@ -50,10 +59,25 @@ def select_model() -> Path:
         print('Invalid choice, try again.')
 
 
+def ui_save_data(fname: str, data) -> None:
+    """Handles user interface for saving LLM data.
+    """
+    resolved = False
+    while not resolved:
+        response = input(f'Save data to file {fname}? Y/n : ')
+        if response is None or response.lower() == 'y':
+            ensure_data_dir()
+            data.write(fname)
+            resolved = True
+        elif response.lower() == 'n':
+            print('Aborted saving.')
+            resolved = True
+
+
 def main():
     """Main CLI loop."""
     ensure_models_dir()
-    model_path = select_model()
+    model_path = ui_select_model()
 
     context = input('Enter your prompt: ').strip()
     if not context:
@@ -62,30 +86,17 @@ def main():
 
     model = ModelInstance(str(model_path), context)
 
-# Data class setup and user input.
-    data = LLMOutputData(model)
-    data_size= int(input('Enter the number of samples to take: ').strip())
+# Data generation.
+    data_size = int(input('Enter the number of samples to take: ').strip())
     while not isinstance(data_size, int):
         data_size = int(input('Please enter an integer: ').strip())
 
-    data.generate(data_size)
+    data = model.generate_data(data_size)
     print('Data generation complete.')
 
 # Handle saving data.
-    timestamp = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
-    data_path = DATA_DIR / (
-        splitext(model_path.name)[0] + '_' + timestamp + '.jsonl'
-    )
-    resolved = False
-    while not resolved:
-        response = input(f'Save data to file {data_path}? Y/n : ')
-        if response is None or response.lower() == 'y':
-            ensure_data_dir()
-            data.write(str(data_path))
-            resolved = True
-        elif response.lower() == 'n':
-            print('Aborted saving.')
-            resolved = True
+    data_path = get_data_path(model_path)
+    ui_save_data(str(data_path), data)
 
 
 if __name__ == '__main__':
