@@ -1,6 +1,8 @@
 """Data container for LLM output."""
 
 import json
+from typing import Any
+
 import numpy as np
 import numpy.typing as npt
 
@@ -8,8 +10,8 @@ import numpy.typing as npt
 class LLMOutputData:
     """Stores LLM output data and handles serialization."""
 
-    def __init__(self, prompt: str, data: npt.NDArray[str]) -> None:
-        """Initialization.
+    def __init__(self, prompt: str, data: npt.NDArray[Any]) -> None:
+        """Initialize.
 
         Args:
             prompt: The prompt used to generate the data.
@@ -20,7 +22,7 @@ class LLMOutputData:
         self.written = False
 
     def write(self, fname: str) -> None:
-        """Saves data to a file in JSONL format.
+        """Save data to a file in JSONL format.
 
         Default filename is `[model]_[timestamp].jsonl`.
         """
@@ -36,10 +38,9 @@ class LLMOutputData:
 
 
     def read(self, fname: str) -> None:
-        """Reads data to this object from a JSONL file.
-        """
+        """Read data to this object from a JSONL file."""
         responses = []
-        with open(fname, 'r', encoding='utf-8') as reader:
+        with open(fname, encoding='utf-8') as reader:
             for line in reader:
                 record = json.loads(line)
                 self.prompt = record['prompt']

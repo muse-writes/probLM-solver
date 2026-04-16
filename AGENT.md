@@ -14,104 +14,153 @@
 ## Directory Structure
 ```
 probLM-solver/
-├── src/problm-solver/          # Main source code
-│   ├── __init__.py              # Package initialization (currently empty docstring)
-│   ├── cli.py                   # Command line interface (partially incomplete)
-│   ├── llama_interface.py        # llama.cpp wrapper interface
-│   └── gen_data.py              # Data generation from LLM outputs
+├── src/problm_solver/          # Main source code (installed as `problm_solver`)
+│   ├── __init__.py              # Package initialisation (empty docstring)
+│   ├── cli.py                   # Command line interface
+│   ├── llama_interface.py       # llama.cpp wrapper interface
+│   └── data.py                  # LLM output data container and serialisation
 ├── tests/
 │   ├── __init__.py
 │   └── test_import.py           # Basic import test (has bug - see issues)
 ├── docs/
 │   └── index.md                 # Documentation (minimal)
-├── pyproject.toml              # Project configuration & dependencies
-├── Dockerfile                   # Docker setup
+├── pyproject.toml               # Project configuration & dependencies
+├── Dockerfile                   # Multi-stage Docker build (dev + app targets)
 ├── docker-compose.yml           # Compose configuration
-├── mkdocs.yml                  # Documentation build config
-├── README.md                   # Project README
-└── .gitignore                  # Standard Python gitignore
+├── mkdocs.yml                   # Documentation build config
+├── README.md                    # Project README
+└── .gitignore                   # Standard Python gitignore
 ```
 
 ---
 
 ## Core Modules
 
-### 1. **llama_interface.py**
-**Purpose**: Wrapper around llama.cpp for local model inference
+### 1. **data.py**
+**Purpose**: Standalone data container for LLM output; handles serialisation and deserialisation.
+
+**Key Classes**:
+- `LLMOutputData`: Stores a prompt and its associated LLM responses
+  - `__init__(prompt: str, data: npt.NDArray[Any])`: Constructed with raw data, no dependency on `ModelInstance`
+  - `write(fname: str)`: Saves to JSONL format; each line has `id`, `prompt`, `response` fields; sets `self.written = True`
+  - `read(fname: str)`: Loads from a JSONL file; populates `self.prompt`, `self.data`, and sets `self.written = True`
+  - `self.written`: Tracks whether in-memory data is in sync with disk
+
+**Dependencies**: `json`, `numpy`
+
+---
+
+### 2. **llama_interface.py**
+**Purpose**: Wrapper around `llama_cpp` for local model inference. Owns the responsibility of generating `LLMOutputData`.
 
 **Key Classes**:
 - `ModelInstance`: Represents a loaded GGUF model
-  - `__init__(fname: str, context: str)`: Load model with context
-  - `query() -> str`: Single query to model, returns string
-  - `query_n_times(n: int) -> np.ndarray[str]`: Run same query N times
-  - Hard-coded context window: `n_ctx=2048`
-  - Hard-coded max tokens: `max_tokens=256`
-  - Uses chat completion format with role='user'
+  - `__init__(fname: str, context: str)`: Loads model via `Llama`; hard-coded `n_ctx=2048`
+  - `query() -> str`: Single inference call; hard-coded `max_tokens=512`; uses chat completion with `role='user'`
+  - `query_n_times(n: int) -> npt.NDArray[Any]`: Calls `query()` N times, returns numpy array
+  - `generate_data(n_samples: int) -> LLMOutputData`: Calls `query_n_times()` and wraps result in `LLMOutputData`
 
-**Dependencies**:
-- `llama_cpp`: Llama class for model loading
-- `numpy` / `numpy.typing`: Array handling
+**Dependencies**: `llama_cpp`, `numpy`, `problm_solver.data`
 
-### 2. **gen_data.py**
-**Purpose**: Data generation and management from LLM outputs
-
-**Key Classes**:
-- `LLMOutputData`: Generate, store, and read LLM outputs
-  - `__init__(model: ModelInstance)`: Accepts a ModelInstance
-  - `generate(n_samples: int)`: Query model N times (stores in `self.data`)
-  - `write(fname=None)`: Save data to file in JSONL format (default: `[model]_[timestamp].jsonl`)
-    - One JSON object per line with `id`, `prompt`, and `response` fields
-    - Properly handles numpy arrays by iterating through responses
-  - `self.written` flag: Tracks if data has been written
-  - Guard: Prevents overwriting data without writing first
-
-**Current Status**: Functional - `write()` method implemented with JSONL output
+---
 
 ### 3. **cli.py**
-**Purpose**: Command-line interface for user interaction
+**Purpose**: Interactive command-line interface for the full generate-and-save workflow.
 
-**Current Features**:
+**Constants**:
+- `PROBLM_DIR`: `~/.problm-solver/`
 - `MODELS_DIR`: `~/.problm-solver/models/`
 - `DATA_DIR`: `~/.problm-solver/datasets/`
-- `ensure_models_dir()`: Creates models directory
-- `ensure_data_dir()`: Creates datasets directory
-- `list_models()`: Lists all `.gguf` files (sorted)
-- `select_model()`: Interactive model selection UI
-- `main()`: Main loop that:
-  1. Ensures models directory exists
-  2. Prompts user to select a model
-  3. Gets user prompt
-  4. Creates ModelInstance
-  5. Prompts for number of samples
-  6. Generates data via `LLMOutputData.generate()`
-  7. Saves data to JSONL file with timestamped filename
-  8. Uses timestamp format: `YYYY-MM-DD-HH:MM:SS`
 
-**Current Status**: Fully functional workflow implemented
+**Functions**:
+- `ensure_models_dir() / ensure_data_dir()`: Create directories if absent
+- `list_models() -> list[Path]`: Sorted list of `.gguf` files in `MODELS_DIR`
+- `get_data_path(model_path: Path) -> Path`: Builds a timestamped JSONL output path using UTC time
+- `ui_select_model() -> Path`: Interactive model picker
+- `ui_save_data(fname: str, data: LLMOutputData)`: Prompts user to confirm saving; calls `data.write()`
+- `main()`: Full workflow — select model → enter prompt → generate data → save to JSONL
+
+**Dependencies**: `problm_solver.llama_interface`, `problm_solver.data`
+
+---
+
+## Architecture
+
+### Dependency Direction
+```
+cli.py → ModelInstance (llama_interface.py) → LLMOutputData (data.py)
+cli.py → LLMOutputData (data.py)
+```
+
+`LLMOutputData` has no dependency on `ModelInstance`. `ModelInstance` constructs and returns `LLMOutputData` via `generate_data()`. This is an intentional inversion from an earlier design where `LLMOutputData` depended on `ModelInstance`.
+
+### Data Flow
+1. User selects a GGUF model file from `~/.problm-solver/models/`
+2. `ModelInstance` is created with the model path and user-supplied prompt
+3. `model.generate_data(n)` queries the LLM N times and returns an `LLMOutputData`
+4. `LLMOutputData.write()` serialises results to a timestamped JSONL file in `~/.problm-solver/datasets/`
 
 ---
 
 ## Dependencies
 
-### Runtime
-- `poethepoet >= 0.32.1`: Task runner
+### Runtime (`dependencies` in pyproject.toml)
+- `llama-cpp-python`: LLM inference via llama.cpp
+- `numpy`: Array operations
+- `poethepoet`: Task runner — kept as a runtime dependency so it is available inside the Docker app container (installed with `--no-dev`)
 
-### Development
-- `pytest >= 8.3.4`: Testing
-- `pytest-mock >= 3.14.0`: Mocking utilities
-- `pytest-xdist >= 3.6.1`: Parallel testing
-- `coverage >= 7.6.10`: Code coverage
+### Development (`dependency-groups.dev`)
+- `pytest >= 8.3.4` + `pytest-mock`, `pytest-xdist`: Testing
+- `coverage[toml] >= 7.6.10`: Code coverage (minimum 50%)
 - `ruff >= 0.9.2`: Linting & formatting
-- `mkdocs-material >= 9.5.21`: Documentation
 - `pre-commit >= 4.0.1`: Git hooks
 - `commitizen >= 4.3.0`: Semantic versioning
-- `typeguard >= 4.4.1`: Type checking
-- `ipython`, `ipykernel`, `ipywidgets`, `ipynb`: Jupyter support
+- `mkdocs-material >= 9.5.21`: Documentation
+- `typeguard >= 4.4.1`, `ty >= 0.0.6`: Type checking
+- `ipython`, `ipykernel`, `ipywidgets`: Jupyter support
 - `codespell >= 2.4.1`: Spell checking
 
-### Implicit (not in pyproject.toml but used)
-- `llama_cpp`: LLM inference engine (NEEDS TO BE ADDED)
-- `numpy`: Array operations (NEEDS TO BE ADDED)
+---
+
+## Docker Setup
+
+### Dockerfile (multi-stage)
+- **`dev` stage**: Based on `ghcr.io/astral-sh/uv:python3.13-trixie`; sets up venv at `/opt/venv`; intended for VS Code Dev Containers
+- **`app` stage**: Based on `python:3.13-slim`; runs `uv sync --no-dev --no-editable --frozen`; venv at `/workspaces/problm-solver/.venv`; ENTRYPOINT is `.venv/bin/poe`, CMD is `serve`
+
+### docker-compose.yml
+- **`devcontainer`**: Runs by default (`docker compose up`); mounts `..:/workspaces`
+- **`app`**: Requires explicit profile (`docker compose up app`); has `stdin_open: true` and `tty: true` for interactive CLI; mounts `~/.problm-solver:/home/user/.problm-solver` for model and dataset persistence
+
+### Running the App
+```sh
+# From host
+docker compose up app
+
+# Equivalent from inside Dev Container
+poe serve
+```
+
+---
+
+## Poe Tasks (`[tool.poe.tasks]`)
+
+The poe executor is set to `type = "virtualenv"` so tasks resolve executables from the project venv rather than the system PATH.
+
+```bash
+poe serve           # Run the CLI (calls the `problm-solver` entry point)
+poe lint            # Run pre-commit hooks on all files
+poe test            # Run tests + coverage report + coverage XML
+poe docs            # Build documentation
+poe docs --serve    # Serve documentation locally with live reload
+```
+
+### Entry Point
+`[project.scripts]` declares:
+```
+problm-solver = "problm_solver.cli:main"
+```
+This is installed into the venv's `bin/` by `uv sync` and is the target of `poe serve`.
 
 ---
 
@@ -119,122 +168,43 @@ probLM-solver/
 
 ### Testing
 - **Framework**: pytest with doctest modules
-- **Coverage**: Minimum 50% required (`fail_under = 50`)
-- **Options**: Exit on first failure, verbose output (v=2), JUnit XML reports
-- **Test Locations**: `src/`, `tests/`
+- **Coverage**: Minimum 50% (`fail_under = 50`)
+- **Options**: Exit on first failure, verbose (v=2), JUnit XML reports
+- **Paths**: `src/`, `tests/`
 
 ### Linting (Ruff)
 - **Line Length**: 100 characters
 - **Target Python**: 3.13
-- **Convention**: NumPy docstrings
-- **Formatting**: docstring-code-format enabled
-- **Ignores**: Many (CPY, FIX, COM812, D203, D213, S101, etc.)
+- **Docstring Convention**: NumPy
+- **Quotes**: Single (inline and multiline)
+- **Imports**: Absolute only (`ban-relative-imports = "all"`)
 
-### Versioning & Commits
-- **Standard**: Conventional Commits (enforced by Commitizen)
-- **Semantic Versioning**: Auto-bumped via `cz bump`
-- **Changelog**: Auto-generated (Keep A Changelog format)
-- **Version Source**: UV-managed
-
-### Documentation
-- **Tool**: MkDocs with Material theme
-- **Serves via**: `poe docs --serve`
+### Versioning
+- Conventional Commits enforced via Commitizen
+- `cz bump` → updates `CHANGELOG.md`, bumps version, creates git tag
 
 ---
 
-## Known Issues & Incomplete Features
+## Known Issues
 
-### High Priority
-1. **Missing Dependencies**: `llama_cpp` and `numpy` not declared in `pyproject.toml`
-   - Likely runtime failures when importing
+### Active
+1. **Test file bug** (`tests/test_import.py`):
+   - `import problm-solver` is invalid Python syntax (hyphens not allowed in module names)
+   - Should be `import problm_solver`
 
-2. **Test File Bug** (`tests/test_import.py`):
-   - Line 4: `import problm-solver` is invalid Python syntax
-   - Should be: `import problm_solver` (underscores, not hyphens)
-   - Current test will fail to run
+2. **Unreachable input validation loop** (`cli.py`, `main()`):
+   - `data_size = int(input(...))` either succeeds (always an `int`) or raises an exception
+   - The `while not isinstance(data_size, int)` guard below it can never be reached
 
-### Medium Priority
-1. **Hard-coded Model Parameters**:
-   - Context window (2048) and max tokens (256) hard-coded in `ModelInstance`
-   - Should be configurable via constructor or config file
+3. **Hard-coded model parameters** (`llama_interface.py`):
+   - `n_ctx=2048` and `max_tokens=512` are not configurable
 
-2. **No Error Handling**:
-   - Model loading could fail silently
-   - Network/file I/O errors not caught
-
-3. **Documentation Minimal**:
-   - `docs/index.md` is just a copy of README
-   - No API documentation or usage examples
-
-### Completed ✓
-- ✓ `gen_data.py` `write()` method now fully implemented with JSONL output format
-- ✓ CLI workflow now complete with data generation and saving
-- ✓ Timestamp functionality added to cli.py
-
----
-
-## Development Workflow
-
-### Available Poe Tasks
-```bash
-poe lint           # Run pre-commit hooks on all files
-poe test           # Run tests + coverage reporting
-poe docs            # Build documentation
-poe docs --serve    # Serve documentation locally (live reload)
-poe serve           # Serve the app (currently placeholder)
-```
-
-### Git Workflow
-- Conventional Commits enforced
-- Bump version: `cz bump` (auto-updates changelog, creates git tag)
-- Push: `git push origin main --tags`
-
-### Development Environments Supported
-1. **GitHub Codespaces** (click link in README)
-2. **VS Code Dev Container** (with container volume)
-3. **uv** (local Python 3.13 venv)
-4. **PyCharm Dev Container**
-
----
-
-## Next Steps / Recommendations for Development
-
-### Critical (Must Do)
-- [ ] Add `llama_cpp` and `numpy` to `pyproject.toml` dependencies
-- [ ] Fix test import statement (use underscores)
-
-### Important (Should Do)
-- [ ] Add more comprehensive tests
-- [ ] Make model parameters configurable (context window, max tokens)
-- [ ] Add error handling for model loading/querying
-- [ ] Expand documentation with API examples
-- [ ] Add statistical analysis functions (currently only data generation)
-
-### Nice to Have
-- [ ] Add configuration file support (YAML/TOML for model settings)
-- [ ] Add model caching/management utilities
-- [ ] Add output format options (JSON, CSV, etc.)
-- [ ] Performance profiling/optimization
-- [ ] Support for batch processing across multiple models
-
----
-
-## Last Git History (5 commits)
-1. `db6492e` - feat: Added standard Python .gitignore, implemented simple CLI tool
-2. `faf50e7` - feat: Added source files cli.py and llama_interface.py
-3. `3345d7a` - build(template): grabbed a copier template
-4. `a9e190c` - Init & README.md
-
----
-
-## Architecture Notes
-
-### Current Design
-- **Separation of Concerns**: Good - LLM interface, data gen, and CLI are separate
-- **Data Flow**: CLI → ModelInstance (llama_interface) → LLMOutputData (gen_data)
-- **Model Loading**: Done once per CLI session via GGUF files from `~/.problm-solver/models/`
-
-### Future Considerations
-- Would likely need database for storing generated datasets
-- Statistical analysis module not yet implemented (mentioned in project description)
-- Scalability: Currently single-model, single-query mode
+### Resolved
+- ✓ `LLMOutputData.read()` implemented
+- ✓ `LLMOutputData` dependency on `ModelInstance` removed; `generate_data()` added to `ModelInstance`
+- ✓ `llama-cpp-python` and `numpy` added to runtime dependencies
+- ✓ `poethepoet` moved to runtime dependencies for Docker app container compatibility
+- ✓ Poe executor changed from `simple` to `virtualenv`
+- ✓ `poe serve` wired up to `problm-solver` entry point (was a placeholder echo)
+- ✓ Intra-package imports converted from bare names to absolute (`problm_solver.*`)
+- ✓ Docker `app` service configured with `stdin_open`, `tty`, and volume mount for model/data persistence

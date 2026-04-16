@@ -1,9 +1,10 @@
 """Command line interface main loop contained here."""
 
+from datetime import UTC, datetime
 from os.path import splitext
 from pathlib import Path
-from datetime import datetime
 
+from problm_solver.data import LLMOutputData
 from problm_solver.llama_interface import ModelInstance
 
 PROBLM_DIR = Path.home() / '.problm-solver'
@@ -28,10 +29,9 @@ def list_models() -> list[Path]:
     return sorted(MODELS_DIR.glob('*.gguf'))
 
 
-def get_data_path(model_path) -> Path:
-    """Returns a Path variable for data storage.
-    """
-    timestamp = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+def get_data_path(model_path: Path) -> Path:
+    """Return a Path variable for data storage."""
+    timestamp = datetime.now(tz=UTC).strftime('%Y-%m-%d-%H:%M:%S')
     return DATA_DIR / (
         splitext(model_path.name)[0] + '_' + timestamp + '.jsonl'
     )
@@ -59,9 +59,8 @@ def ui_select_model() -> Path:
         print('Invalid choice, try again.')
 
 
-def ui_save_data(fname: str, data) -> None:
-    """Handles user interface for saving LLM data.
-    """
+def ui_save_data(fname: str, data: LLMOutputData) -> None:
+    """Handle user interface for saving LLM data."""
     resolved = False
     while not resolved:
         response = input(f'Save data to file {fname}? Y/n : ')
@@ -74,8 +73,8 @@ def ui_save_data(fname: str, data) -> None:
             resolved = True
 
 
-def main():
-    """Main CLI loop."""
+def main() -> None:
+    """Perform main CLI."""
     ensure_models_dir()
     model_path = ui_select_model()
 
