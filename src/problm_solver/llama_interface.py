@@ -4,7 +4,7 @@ import numpy as np
 import numpy.typing as npt
 
 from llama_cpp import Llama
-from data import LLMOutputData
+from problm_solver.data import LLMOutputData
 
 
 class ModelInstance():

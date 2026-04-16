@@ -6,12 +6,19 @@ services:
     volumes:
       - ..:/workspaces
       - command-history-volume:/home/user/.history/
+    environment:
+      - PUID=1000
+      - PGID=1000
 
   app:
     build:
       target: app
     profiles:
       - app
+    stdin_open: true
+    tty: true
+    volumes:
+      - ~/.problm-solver:/home/user/.problm-solver
 
 volumes:
   command-history-volume:

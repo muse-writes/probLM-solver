@@ -4,7 +4,7 @@ from os.path import splitext
 from pathlib import Path
 from datetime import datetime
 
-from llama_interface import ModelInstance
+from problm_solver.llama_interface import ModelInstance
 
 PROBLM_DIR = Path.home() / '.problm-solver'
 MODELS_DIR = PROBLM_DIR / 'models'

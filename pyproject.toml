@@ -12,8 +12,13 @@ authors = [
 ]
 requires-python = ">=3.13,<4.0"
 dependencies = [
-  "poethepoet (>=0.32.1)",
+  "llama-cpp-python",
+  "numpy",
+  "poethepoet",
 ]
+
+[project.scripts]
+problm-solver = "problm_solver.cli:main"
 
 [project.urls]  # https://packaging.python.org/en/latest/specifications/well-known-project-urls/#well-known-labels
 homepage = "https://github.com/muse-writes/probLM-solver"
@@ -110,7 +115,7 @@ unused-ignore-comment = "warn"
 error-on-warning = true
 
 [tool.poe.executor]  # https://github.com/nat-n/poethepoet
-type = "simple"
+type = "virtualenv"
 
 [tool.poe.tasks]
 
@@ -133,9 +138,7 @@ type = "simple"
 
   [tool.poe.tasks.serve]
   help = "Serve the app"
-
-    [[tool.poe.tasks.serve.sequence]]
-    cmd = "echo 'Serving app (placeholder)...'"
+  cmd = "problm-solver"
 
   [tool.poe.tasks.lint]
   help = "Lint this app"
