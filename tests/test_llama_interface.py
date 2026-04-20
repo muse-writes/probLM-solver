@@ -80,6 +80,86 @@ class TestModelInstanceQueryNTimes:
             assert isinstance(item, str)
 
 
+class TestModelInstanceQueryLogProbs:
+    """Tests for ModelInstance.query_log_probs."""
+
+    @pytest.fixture()
+    def logprob_model_instance(self):
+        """Return a ModelInstance whose Llama mock returns a logprobs response."""
+        from problm_solver.llama_interface import ModelInstance
+
+        mock_llm = MagicMock()
+        mock_llm.create_chat_completion.return_value = {
+            'choices': [{
+                'message': {'content': 'Four.'},
+                'logprobs': {
+                    'content': [
+                        {'token': 'Four', 'logprob': -0.105, 'bytes': None, 'top_logprobs': []},
+                        {'token': '.', 'logprob': -0.011, 'bytes': None, 'top_logprobs': []},
+                    ]
+                },
+                'finish_reason': 'stop',
+            }]
+        }
+        with patch('problm_solver.llama_interface.Llama') as MockLlama:
+            MockLlama.return_value = mock_llm
+            instance = ModelInstance(fname='fake.gguf', context='What is 2+2?')
+        return instance
+
+    def test_returns_llmtokendata(self, logprob_model_instance) -> None:
+        """query_log_probs() returns an LLMTokenData instance."""
+        from problm_solver.data import LLMTokenData
+
+        result = logprob_model_instance.query_log_probs()
+        assert isinstance(result, LLMTokenData)
+
+    def test_tokens_extracted_from_logprobs_content(self, logprob_model_instance) -> None:
+        """Tokens come from the logprobs content, not from re-tokenizing the text."""
+        result = logprob_model_instance.query_log_probs()
+        assert result.tokens == ['Four', '.']
+
+    def test_probs_are_exp_of_logprobs(self, logprob_model_instance) -> None:
+        """Each probability is exp(logprob) of the corresponding entry."""
+        import math
+
+        result = logprob_model_instance.query_log_probs()
+        expected = [math.exp(-0.105), math.exp(-0.011)]
+        assert result.probs == pytest.approx(expected)
+
+    def test_probs_are_between_zero_and_one(self, logprob_model_instance) -> None:
+        """All probabilities are valid (in the range (0, 1])."""
+        result = logprob_model_instance.query_log_probs()
+        assert all(0.0 < p <= 1.0 for p in result.probs)
+
+    def test_tokens_and_probs_same_length(self, logprob_model_instance) -> None:
+        """tokens and probs are positionally aligned and have equal length."""
+        result = logprob_model_instance.query_log_probs()
+        assert len(result.tokens) == len(result.probs)
+
+    def test_prompt_is_stored(self, logprob_model_instance) -> None:
+        """The prompt is stored on the returned LLMTokenData."""
+        result = logprob_model_instance.query_log_probs()
+        assert result.prompt == 'What is 2+2?'
+
+
+class TestModelInstanceGetTokenizer:
+    """Tests for ModelInstance.get_tokenizer."""
+
+    def test_returns_llama_tokenizer(self, model_instance) -> None:
+        """get_tokenizer() returns a LlamaTokenizer instance."""
+        from problm_solver.analysis.tokenizer import LlamaTokenizer
+
+        result = model_instance.get_tokenizer()
+        assert isinstance(result, LlamaTokenizer)
+
+    def test_tokenizer_is_backed_by_model_llm(self, model_instance) -> None:
+        """The returned tokenizer wraps the same Llama object as the model."""
+        from problm_solver.analysis.tokenizer import LlamaTokenizer
+
+        result = model_instance.get_tokenizer()
+        assert result._llama is model_instance._llm
+
+
 class TestModelInstanceGenerateData:
     """Tests for ModelInstance.generate_data."""
 

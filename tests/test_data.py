@@ -17,7 +17,38 @@ def sample_data() -> LLMOutputData:
     )
 
 
-class TestLLMOutputDataInit:
+class TestLLMTokenData:
+    """Tests for LLMTokenData.__init__."""
+
+    @pytest.fixture()
+    def sample_token_data(self):
+        """Return a small LLMTokenData instance for reuse."""
+        from problm_solver.data import LLMTokenData
+
+        return LLMTokenData(
+            prompt='What is 2+2?',
+            tokens=['Four', '.'],
+            probs=[0.9, 0.99],
+        )
+
+    def test_stores_prompt(self, sample_token_data) -> None:
+        """prompt attribute is set correctly on construction."""
+        assert sample_token_data.prompt == 'What is 2+2?'
+
+    def test_stores_tokens(self, sample_token_data) -> None:
+        """tokens attribute is set correctly on construction."""
+        assert sample_token_data.tokens == ['Four', '.']
+
+    def test_stores_probs(self, sample_token_data) -> None:
+        """probs attribute is set correctly on construction."""
+        assert sample_token_data.probs == [0.9, 0.99]
+
+    def test_tokens_and_probs_aligned(self, sample_token_data) -> None:
+        """tokens and probs have equal length and are positionally aligned."""
+        assert len(sample_token_data.tokens) == len(sample_token_data.probs)
+
+
+
     """Tests for LLMOutputData.__init__."""
 
     def test_stores_prompt(self, sample_data: LLMOutputData) -> None:

@@ -3,8 +3,8 @@
 from problm_solver.analysis.tokenizer import (
     LlamaTokenizer,
     Token,
-    TokenSequence,
     Tokenizer,
+    TokenSequence,
     WordTokenizer,
 )
 

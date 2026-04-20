@@ -103,8 +103,8 @@ class _LlamaInterface(Protocol):
     def tokenize(
         self,
         text: bytes,
-        add_bos: bool = ...,  # noqa: ANN001
-        special: bool = ...,  # noqa: ANN001
+        add_bos: bool = ...,
+        special: bool = ...,
     ) -> list[int]:
         """Encode bytes to a list of integer token IDs."""
         ...
@@ -112,8 +112,8 @@ class _LlamaInterface(Protocol):
     def detokenize(
         self,
         tokens: list[int],
-        prev_tokens: list[int] | None = ...,  # noqa: ANN001
-        special: bool = ...,  # noqa: ANN001
+        prev_tokens: list[int] | None = ...,
+        special: bool = ...,
     ) -> bytes:
         """Decode a list of integer token IDs back to bytes."""
         ...
