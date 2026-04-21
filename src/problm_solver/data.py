@@ -50,6 +50,17 @@ class LLMOutputData:
         self.written = True
 
 
+class TokenProbError(ValueError):
+    """Raise an error when number of tokens in data isn't equal to probs."""
+
+    def __init__(self, data_class: type) -> None:
+        """Initialize error message."""
+        super().__init__(
+            f'Number of probabilities in `{data_class}` does not match the '
+            f'number of tokens.'
+        )
+
+
 class LLMTokenData:
     """Store a single tokenized LLM response paired with per-token probabilities."""
 
@@ -61,6 +72,34 @@ class LLMTokenData:
         :param probs: The probability of each token at its position in the response.
             Must be the same length as ``tokens``.
         """
+        if len(tokens) != len(probs):
+            raise TokenProbError(self)
         self.prompt = prompt
         self.tokens = tokens
         self.probs = probs
+        self.written = False
+
+
+    def write(self, fname: str) -> None:
+        """Save data to a file in JSON format.
+
+        Default filename is `prob_[model]_[timestamp].json`.
+        """
+        with open(fname, 'w', encoding='utf-8') as writer:
+            record = {
+                'prompt': self.prompt,
+                'tokens': self.tokens,
+                'probs': self.probs,
+            }
+            writer.write(json.dumps(record))
+        self.written = True
+
+
+    def read(self, fname: str) -> None:
+        """Read data from JSON file."""
+        with open(fname, encoding='utf-8') as reader:
+            data = json.load(reader)
+            self.prompt = data['prompt']
+            self.tokens = data['tokens']
+            self.probs = data['probs']
+        self.written = True

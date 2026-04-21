@@ -18,10 +18,17 @@ probLM-solver/
 │   ├── __init__.py              # Package initialisation (empty docstring)
 │   ├── cli.py                   # Command line interface
 │   ├── llama_interface.py       # llama.cpp wrapper interface
-│   └── data.py                  # LLM output data container and serialisation
+│   ├── data.py                  # LLM output data containers and serialisation
+│   └── analysis/                # Statistical analysis subpackage
+│       ├── __init__.py          # Re-exports public analysis API
+│       ├── tokenizer.py         # Tokenizer ABC and implementations
+│       └── probabilities.py     # Positional token probability analysis (in progress)
 ├── tests/
 │   ├── __init__.py
-│   └── test_import.py           # Basic import test (has bug - see issues)
+│   ├── test_import.py           # Basic import test
+│   ├── test_data.py             # Tests for data.py
+│   ├── test_cli.py              # Tests for cli.py
+│   └── test_llama_interface.py  # Tests for llama_interface.py
 ├── docs/
 │   └── index.md                 # Documentation (minimal)
 ├── pyproject.toml               # Project configuration & dependencies
@@ -37,7 +44,7 @@ probLM-solver/
 ## Core Modules
 
 ### 1. **data.py**
-**Purpose**: Standalone data container for LLM output; handles serialisation and deserialisation.
+**Purpose**: Standalone data containers for LLM output; handles serialisation and deserialisation.
 
 **Key Classes**:
 - `LLMOutputData`: Stores a prompt and its associated LLM responses
@@ -46,12 +53,18 @@ probLM-solver/
   - `read(fname: str)`: Loads from a JSONL file; populates `self.prompt`, `self.data`, and sets `self.written = True`
   - `self.written`: Tracks whether in-memory data is in sync with disk
 
-**Dependencies**: `json`, `numpy`
+- `LLMTokenData`: Stores a single tokenized LLM response paired with per-token probabilities
+  - `__init__(prompt: str, tokens: TokenSequence, probs: list[float])`: Constructed from logprob API output
+  - `self.tokens`: Ordered list of token strings
+  - `self.probs`: Per-token probabilities (same length as `tokens`); `probs[i]` is the probability of `tokens[i]` at its position
+  - No serialisation methods yet
+
+**Dependencies**: `json`, `numpy`, `problm_solver.analysis`
 
 ---
 
 ### 2. **llama_interface.py**
-**Purpose**: Wrapper around `llama_cpp` for local model inference. Owns the responsibility of generating `LLMOutputData`.
+**Purpose**: Wrapper around `llama_cpp` for local model inference. Owns the responsibility of generating `LLMOutputData` and `LLMTokenData`.
 
 **Key Classes**:
 - `ModelInstance`: Represents a loaded GGUF model
@@ -59,8 +72,10 @@ probLM-solver/
   - `query() -> str`: Single inference call; hard-coded `max_tokens=512`; uses chat completion with `role='user'`
   - `query_n_times(n: int) -> npt.NDArray[Any]`: Calls `query()` N times, returns numpy array
   - `generate_data(n_samples: int) -> LLMOutputData`: Calls `query_n_times()` and wraps result in `LLMOutputData`
+  - `query_log_probs() -> LLMTokenData`: Single inference call with `logprobs=True`; extracts token strings and probabilities (`exp(logprob)`) directly from the API response; returns `LLMTokenData`
+  - `get_tokenizer() -> LlamaTokenizer`: Returns a `LlamaTokenizer` backed by this model's `Llama` instance
 
-**Dependencies**: `llama_cpp`, `numpy`, `problm_solver.data`
+**Dependencies**: `math`, `llama_cpp`, `numpy`, `problm_solver.data`, `problm_solver.analysis.tokenizer`
 
 ---
 
@@ -84,21 +99,72 @@ probLM-solver/
 
 ---
 
+### 4. **analysis/\_\_init\_\_.py**
+Re-exports the public API of the `analysis` subpackage:
+`Tokenizer`, `WordTokenizer`, `LlamaTokenizer`, `Token`, `TokenSequence`
+
+---
+
+### 5. **analysis/tokenizer.py**
+**Purpose**: Tokenizer abstraction and implementations for splitting LLM response strings into token sequences for statistical analysis.
+
+**Type Aliases**:
+- `Token = str`: A single decoded token string
+- `TokenSequence = list[Token]`: An ordered list of tokens from one response
+
+**Key Classes**:
+- `Tokenizer` (ABC): Abstract base class; defines `tokenize(text: str) -> TokenSequence`
+- `WordTokenizer(Tokenizer)`: Regex-based tokenizer; no external dependencies
+  - Splits on word boundaries; keeps contractions (e.g. `"it's"`) as single tokens; punctuation becomes individual tokens; whitespace is discarded
+  - `__init__(*, lowercase: bool = False)`
+- `LlamaTokenizer(Tokenizer)`: Tokenizer backed by a loaded `llama_cpp.Llama` instance
+  - Uses the model's own BPE vocabulary; each token ID is decoded individually via `detokenize([id])` to preserve token boundaries
+  - `__init__(llama: _LlamaInterface)`
+- `_LlamaInterface` (Protocol, private): Structural protocol describing the `tokenize` and `detokenize` methods used from `llama_cpp.Llama`; avoids a hard module-level import of `llama_cpp`
+
+**Dependencies**: `re`, `abc`, `typing`
+
+---
+
+### 6. **analysis/probabilities.py** *(in progress — contains active linter errors)*
+**Purpose**: Calculates positional token probabilities over an `LLMOutputData` dataset.
+
+**Key Classes**:
+- `Probabilities`: Stub implementation; not yet functional
+  - `__init__(data: LLMOutputData, entry: str)`
+  - `evaluate() -> None`: Skeleton only; body is `pass`
+
+**Active linter errors** (see Known Issues):
+- `F821`: `List` undefined (should be built-in `list`)
+- `F821`: `data` undefined in `evaluate()` (should be `self.data`)
+- `F841`: `probabilities` assigned but never used
+- `B007`: Loop variables `ii` and `data_entry` unused
+
+**Dependencies**: `numpy`, `problm_solver.data`
+
+---
+
 ## Architecture
 
 ### Dependency Direction
 ```
 cli.py → ModelInstance (llama_interface.py) → LLMOutputData (data.py)
+                                             → LLMTokenData (data.py)
+                                             → LlamaTokenizer (analysis/tokenizer.py)
 cli.py → LLMOutputData (data.py)
+data.py → analysis/ (TokenSequence type alias)
+analysis/tokenizer.py → (no intra-package deps)
 ```
 
-`LLMOutputData` has no dependency on `ModelInstance`. `ModelInstance` constructs and returns `LLMOutputData` via `generate_data()`. This is an intentional inversion from an earlier design where `LLMOutputData` depended on `ModelInstance`.
+`LLMOutputData` and `LLMTokenData` have no dependency on `ModelInstance`. `ModelInstance` constructs and returns both via `generate_data()` and `query_log_probs()` respectively.
 
 ### Data Flow
 1. User selects a GGUF model file from `~/.problm-solver/models/`
 2. `ModelInstance` is created with the model path and user-supplied prompt
-3. `model.generate_data(n)` queries the LLM N times and returns an `LLMOutputData`
-4. `LLMOutputData.write()` serialises results to a timestamped JSONL file in `~/.problm-solver/datasets/`
+3. **Text responses**: `model.generate_data(n)` queries the LLM N times and returns an `LLMOutputData`
+4. **Token + probability responses**: `model.query_log_probs()` queries once with `logprobs=True` and returns an `LLMTokenData`
+5. `LLMOutputData.write()` serialises results to a timestamped JSONL file in `~/.problm-solver/datasets/`
+6. Token sequences for statistical analysis are obtained by calling `model.get_tokenizer()` and applying `tokenizer.tokenize()` to each response in an `LLMOutputData`
 
 ---
 
@@ -171,11 +237,14 @@ This is installed into the venv's `bin/` by `uv sync` and is the target of `poe 
 - **Coverage**: Minimum 50% (`fail_under = 50`)
 - **Options**: Exit on first failure, verbose (v=2), JUnit XML reports
 - **Paths**: `src/`, `tests/`
+- **Test files**: `test_import.py`, `test_data.py`, `test_cli.py`, `test_llama_interface.py`
+- **Doctests**: `WordTokenizer` and `LlamaTokenizer` have inline doctests collected by `--doctest-modules`
+- **Mocking**: `llama_cpp.Llama` is patched in all `ModelInstance` tests; `LlamaTokenizer` is tested via `_LlamaInterface`-compatible mocks; CLI filesystem interactions use `monkeypatch` against `tmp_path`
 
 ### Linting (Ruff)
 - **Line Length**: 100 characters
 - **Target Python**: 3.13
-- **Docstring Convention**: NumPy
+- **Docstring Convention**: reStructuredText / PEP 257 (`:param:`, `:returns:` directives)
 - **Quotes**: Single (inline and multiline)
 - **Imports**: Absolute only (`ban-relative-imports = "all"`)
 
@@ -188,16 +257,25 @@ This is installed into the venv's `bin/` by `uv sync` and is the target of `poe 
 ## Known Issues
 
 ### Active
-1. **Test file bug** (`tests/test_import.py`):
-   - `import problm-solver` is invalid Python syntax (hyphens not allowed in module names)
-   - Should be `import problm_solver`
-
-2. **Unreachable input validation loop** (`cli.py`, `main()`):
+1. **Unreachable input validation loop** (`cli.py`, `main()`):
    - `data_size = int(input(...))` either succeeds (always an `int`) or raises an exception
    - The `while not isinstance(data_size, int)` guard below it can never be reached
 
-3. **Hard-coded model parameters** (`llama_interface.py`):
+2. **Hard-coded model parameters** (`llama_interface.py`):
    - `n_ctx=2048` and `max_tokens=512` are not configurable
+
+3. **`probabilities.py` is a non-functional stub** with multiple linter errors:
+   - `F821`: `List` used but not imported; should be built-in `list[str]`
+   - `F821`: `data` referenced in `evaluate()` but not in scope; should be `self.data`
+   - `F841`: local variable `probabilities` assigned but never used
+   - `B007`: loop variables `ii` and `data_entry` unused (loop body is `pass`)
+
+4. **`FBT001` on `_LlamaInterface` protocol** (`analysis/tokenizer.py`):
+   - `add_bos: bool` and `special: bool` are flagged as boolean positional arguments
+   - These mirror the external `llama_cpp.Llama` API signature and cannot be made keyword-only
+
+5. **`LLMTokenData` has no serialisation** (`data.py`):
+   - Unlike `LLMOutputData`, there are no `write()` / `read()` methods yet
 
 ### Resolved
 - ✓ `LLMOutputData.read()` implemented
@@ -208,3 +286,10 @@ This is installed into the venv's `bin/` by `uv sync` and is the target of `poe 
 - ✓ `poe serve` wired up to `problm-solver` entry point (was a placeholder echo)
 - ✓ Intra-package imports converted from bare names to absolute (`problm_solver.*`)
 - ✓ Docker `app` service configured with `stdin_open`, `tty`, and volume mount for model/data persistence
+- ✓ Test file bug fixed (`import problm-solver` → `import problm_solver`)
+- ✓ Test suite created: `test_data.py`, `test_cli.py`, `test_llama_interface.py`
+- ✓ `analysis/` subpackage created with `Tokenizer` ABC, `WordTokenizer`, and `LlamaTokenizer`
+- ✓ `LLMTokenData` added to `data.py` for storing per-token probability data
+- ✓ `ModelInstance.query_log_probs()` implemented using `logprobs=True` chat completion
+- ✓ `ModelInstance.get_tokenizer()` added as public accessor for `LlamaTokenizer`
+- ✓ Docstring convention changed from NumPy to reStructuredText (pep257 in ruff config)
