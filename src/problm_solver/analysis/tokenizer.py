@@ -25,15 +25,8 @@ class Tokenizer(ABC):
     def tokenize(self, text: str) -> TokenSequence:
         """Split text into a sequence of tokens.
 
-        Parameters
-        ----------
-        text : str
-            The input string to tokenize.
-
-        Returns
-        -------
-        TokenSequence
-            An ordered list of token strings covering the input.
+        :param text: The input string to tokenize.
+        :returns: An ordered list of token strings covering the input.
         """
 
 
@@ -46,14 +39,9 @@ class WordTokenizer(Tokenizer):
     kept as single tokens; every non-word, non-space character becomes its
     own token.
 
-    Parameters
-    ----------
-    lowercase : bool, optional
-        If ``True``, all tokens are lowercased before returning.
+    :param lowercase: If ``True``, all tokens are lowercased before returning.
         Default is ``False``.
 
-    Examples
-    --------
     >>> t = WordTokenizer()
     >>> t.tokenize('Hello, world!')
     ['Hello', ',', 'world', '!']
@@ -69,20 +57,14 @@ class WordTokenizer(Tokenizer):
     _PATTERN: re.Pattern[str] = re.compile(r"\w+(?:'\w+)*|[^\w\s]")
 
     def __init__(self, *, lowercase: bool = False) -> None:
+        """Initialise the tokenizer."""
         self.lowercase = lowercase
 
     def tokenize(self, text: str) -> TokenSequence:
         """Split text into word and punctuation tokens.
 
-        Parameters
-        ----------
-        text : str
-            The input string to tokenize.
-
-        Returns
-        -------
-        TokenSequence
-            Words (including contractions) and punctuation characters as
+        :param text: The input string to tokenize.
+        :returns: Words (including contractions) and punctuation characters as
             separate tokens. Whitespace is consumed as a separator and is
             not included in the output.
         """
@@ -130,15 +112,10 @@ class LlamaTokenizer(Tokenizer):
     preserved. Leading spaces are kept as part of each piece (e.g. ``' world'``),
     reflecting the space-prefixed convention used in SentencePiece vocabularies.
 
-    Parameters
-    ----------
-    llama : llama_cpp.Llama
-        A loaded Llama model instance. Concretely, any object that provides
-        ``tokenize(bytes, add_bos, special) -> list[int]`` and
+    :param llama: A loaded Llama model instance. Concretely, any object that
+        provides ``tokenize(bytes, add_bos, special) -> list[int]`` and
         ``detokenize(list[int]) -> bytes`` is accepted.
 
-    Examples
-    --------
     >>> from unittest.mock import MagicMock
     >>> mock = MagicMock()
     >>> mock.tokenize.return_value = [1, 2, 3]
@@ -149,6 +126,7 @@ class LlamaTokenizer(Tokenizer):
     """
 
     def __init__(self, llama: _LlamaInterface) -> None:
+        """Initialise with a ``llama_cpp.Llama`` instance."""
         self._llama = llama
 
     def tokenize(self, text: str) -> TokenSequence:
@@ -158,16 +136,9 @@ class LlamaTokenizer(Tokenizer):
         token IDs, then converts each ID individually to a string via
         ``Llama.detokenize``.
 
-        Parameters
-        ----------
-        text : str
-            The input string to tokenize.
-
-        Returns
-        -------
-        TokenSequence
-            Sub-word pieces as decoded UTF-8 strings. Any byte sequences that
-            are not valid UTF-8 are replaced with the Unicode replacement
+        :param text: The input string to tokenize.
+        :returns: Sub-word pieces as decoded UTF-8 strings. Any byte sequences
+            that are not valid UTF-8 are replaced with the Unicode replacement
             character (``U+FFFD``).
         """
         token_ids = self._llama.tokenize(text.encode(), add_bos=False)

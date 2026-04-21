@@ -41,12 +41,12 @@ class ModelInstance:
 
 
     def query_log_probs(self) -> LLMTokenData:
-        """Query the model once and return the response as tokens with probabilities.
+        """Query the model and return the response as tokens with probabilities.
 
-        Calls the model with ``logprobs=True``, which causes the API to return the
-        model's own BPE tokenization of the response alongside the log-probability
-        of each token at its position. Log-probabilities are converted to
-        probabilities via ``exp``.
+        Calls the model with ``logprobs=True``, which causes the API to return
+        the model's own BPE tokenization of the response alongside the
+        log-probability of each token at its position. Log-probabilities are
+        converted to probabilities via ``exp``.
         """
         output = self._llm.create_chat_completion(
             messages=[{'role': 'user', 'content': self.context}],

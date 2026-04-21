@@ -15,9 +15,8 @@ class LLMOutputData:
     def __init__(self, prompt: str, data: npt.NDArray[Any]) -> None:
         """Initialize.
 
-        Args:
-            prompt: The prompt used to generate the data.
-            data: Array of string responses from the LLM.
+        :param prompt: The prompt used to generate the data.
+        :param data: Array of string responses from the LLM.
         """
         self.prompt = prompt
         self.data = data
@@ -57,14 +56,9 @@ class LLMTokenData:
     def __init__(self, prompt: str, tokens: TokenSequence, probs: list[float]) -> None:
         """Initialize.
 
-        Parameters
-        ----------
-        prompt : str
-            The prompt used to generate the response.
-        tokens : TokenSequence
-            The response as an ordered list of token strings.
-        probs : list[float]
-            The probability of each token at its position in the response.
+        :param prompt: The prompt used to generate the response.
+        :param tokens: The response as an ordered list of token strings.
+        :param probs: The probability of each token at its position in the response.
             Must be the same length as ``tokens``.
         """
         self.prompt = prompt
