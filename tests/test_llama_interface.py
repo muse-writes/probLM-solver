@@ -28,6 +28,30 @@ def model_instance():
     return instance
 
 
+class TestModelInstanceInit:
+    """Tests for ModelInstance.__init__."""
+
+    def test_logits_all_defaults_to_false(self) -> None:
+        """logits_all defaults to False, so Llama is constructed without it set."""
+        from problm_solver.llama_interface import ModelInstance
+
+        with patch('problm_solver.llama_interface.Llama') as MockLlama:
+            MockLlama.return_value = MagicMock()
+            ModelInstance(fname='fake.gguf', context='Hello')
+            _, kwargs = MockLlama.call_args
+            assert kwargs.get('logits_all') is False
+
+    def test_logits_all_true_passed_to_llama(self) -> None:
+        """logits_all=True is forwarded to the Llama constructor."""
+        from problm_solver.llama_interface import ModelInstance
+
+        with patch('problm_solver.llama_interface.Llama') as MockLlama:
+            MockLlama.return_value = MagicMock()
+            ModelInstance(fname='fake.gguf', context='Hello', logits_all=True)
+            _, kwargs = MockLlama.call_args
+            assert kwargs.get('logits_all') is True
+
+
 class TestModelInstanceQuery:
     """Tests for ModelInstance.query."""
 
@@ -140,6 +164,12 @@ class TestModelInstanceQueryLogProbs:
         """The prompt is stored on the returned LLMTokenData."""
         result = logprob_model_instance.query_log_probs()
         assert result.prompt == 'What is 2+2?'
+
+    def test_passes_top_logprobs_1_to_api(self, logprob_model_instance) -> None:
+        """query_log_probs() passes top_logprobs=1 so the chat handler enables logprob output."""
+        logprob_model_instance.query_log_probs()
+        _, kwargs = logprob_model_instance._llm.create_chat_completion.call_args
+        assert kwargs.get('top_logprobs') == 1
 
 
 class TestModelInstanceGetTokenizer:

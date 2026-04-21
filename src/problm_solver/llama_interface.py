@@ -14,9 +14,9 @@ from problm_solver.data import LLMOutputData, LLMTokenData
 class ModelInstance:
     """Model class."""
 
-    def __init__(self, fname: str, context: str) -> None:
+    def __init__(self, fname: str, context: str, logits_all: bool = False) -> None:
         """Init method."""
-        self._llm = Llama(model_path=fname, n_ctx=2048)
+        self._llm = Llama(model_path=fname, n_ctx=2048, logits_all=logits_all)
         self.context = context
 
 
@@ -52,6 +52,7 @@ class ModelInstance:
             messages=[{'role': 'user', 'content': self.context}],
             max_tokens=512,
             logprobs=True,
+            top_logprobs=1,
         )
         logprob_content = output['choices'][0]['logprobs']['content']
         tokens: TokenSequence = [entry['token'] for entry in logprob_content]
