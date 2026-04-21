@@ -54,10 +54,13 @@ probLM-solver/
   - `self.written`: Tracks whether in-memory data is in sync with disk
 
 - `LLMTokenData`: Stores a single tokenized LLM response paired with per-token probabilities
-  - `__init__(prompt: str, tokens: TokenSequence, probs: list[float])`: Constructed from logprob API output
+  - `__init__(prompt: str, tokens: TokenSequence, probs: list[float])`: Validates that `len(tokens) == len(probs)`, raising `TokenProbError` otherwise
+  - `write(fname: str)`: Saves to JSON format as a single record with `prompt`, `tokens`, `probs` fields; sets `self.written = True`
+  - `read(fname: str)`: Loads from a JSON file; populates `self.prompt`, `self.tokens`, `self.probs`; sets `self.written = True`
   - `self.tokens`: Ordered list of token strings
   - `self.probs`: Per-token probabilities (same length as `tokens`); `probs[i]` is the probability of `tokens[i]` at its position
-  - No serialisation methods yet
+
+- `TokenProbError(ValueError)`: Raised by `LLMTokenData.__init__` when `len(tokens) != len(probs)`
 
 **Dependencies**: `json`, `numpy`, `problm_solver.analysis`
 
@@ -68,11 +71,11 @@ probLM-solver/
 
 **Key Classes**:
 - `ModelInstance`: Represents a loaded GGUF model
-  - `__init__(fname: str, context: str)`: Loads model via `Llama`; hard-coded `n_ctx=2048`
+  - `__init__(fname: str, context: str, logits_all: bool = False)`: Loads model via `Llama`; hard-coded `n_ctx=2048`; `logits_all` forwarded to `Llama` — set `True` for logprob runs
   - `query() -> str`: Single inference call; hard-coded `max_tokens=512`; uses chat completion with `role='user'`
   - `query_n_times(n: int) -> npt.NDArray[Any]`: Calls `query()` N times, returns numpy array
   - `generate_data(n_samples: int) -> LLMOutputData`: Calls `query_n_times()` and wraps result in `LLMOutputData`
-  - `query_log_probs() -> LLMTokenData`: Single inference call with `logprobs=True`; extracts token strings and probabilities (`exp(logprob)`) directly from the API response; returns `LLMTokenData`
+  - `query_log_probs() -> LLMTokenData`: Single inference call with `logprobs=True, top_logprobs=1`; extracts token strings and probabilities (`exp(logprob)`) directly from the API response; returns `LLMTokenData`
   - `get_tokenizer() -> LlamaTokenizer`: Returns a `LlamaTokenizer` backed by this model's `Llama` instance
 
 **Dependencies**: `math`, `llama_cpp`, `numpy`, `problm_solver.data`, `problm_solver.analysis.tokenizer`
@@ -85,15 +88,22 @@ probLM-solver/
 **Constants**:
 - `PROBLM_DIR`: `~/.problm-solver/`
 - `MODELS_DIR`: `~/.problm-solver/models/`
-- `DATA_DIR`: `~/.problm-solver/datasets/`
+- `RESPONSES_DIR`: `~/.problm-solver/datasets/responses/`
+- `PROBS_DIR`: `~/.problm-solver/datasets/probabilities/`
+- `NUMBER_OF_FUNCTIONS = 2`, `GEN_DATA = 1`, `PROBS = 2`: Function selection constants
 
 **Functions**:
-- `ensure_models_dir() / ensure_data_dir()`: Create directories if absent
+- `ensure_models_dir() / ensure_responses_dir() / ensure_probs_dir()`: Create directories if absent; each returns its path
 - `list_models() -> list[Path]`: Sorted list of `.gguf` files in `MODELS_DIR`
-- `get_data_path(model_path: Path) -> Path`: Builds a timestamped JSONL output path using UTC time
+- `get_responses_path(model_path: Path) -> Path`: Timestamped `.jsonl` path inside `RESPONSES_DIR`
+- `get_probs_path(model_path: Path) -> Path`: Timestamped `prob_*.json` path inside `PROBS_DIR`
 - `ui_select_model() -> Path`: Interactive model picker
+- `ui_select_function() -> int`: Interactive function picker; returns `GEN_DATA` (1) or `PROBS` (2)
+- `ui_gen_data(model, model_path)`: Prompts for sample count, calls `model.generate_data()`, delegates to `ui_save_data`
 - `ui_save_data(fname: str, data: LLMOutputData)`: Prompts user to confirm saving; calls `data.write()`
-- `main()`: Full workflow — select model → enter prompt → generate data → save to JSONL
+- `ui_save_token_data(fname: str, data: LLMTokenData)`: Prompts user to confirm saving; calls `data.write()`
+- `ui_get_probs(model, model_path)`: Calls `model.query_log_probs()`, delegates to `ui_save_token_data`
+- `main()`: Full workflow — select model → enter prompt → **select function** → load model (with `logits_all=True` iff probs run) → dispatch to `ui_gen_data` or `ui_get_probs`
 
 **Dependencies**: `problm_solver.llama_interface`, `problm_solver.data`
 
@@ -160,10 +170,10 @@ analysis/tokenizer.py → (no intra-package deps)
 
 ### Data Flow
 1. User selects a GGUF model file from `~/.problm-solver/models/`
-2. `ModelInstance` is created with the model path and user-supplied prompt
-3. **Text responses**: `model.generate_data(n)` queries the LLM N times and returns an `LLMOutputData`
-4. **Token + probability responses**: `model.query_log_probs()` queries once with `logprobs=True` and returns an `LLMTokenData`
-5. `LLMOutputData.write()` serialises results to a timestamped JSONL file in `~/.problm-solver/datasets/`
+2. User enters a prompt, then selects a function (gen_data or probs)
+3. `ModelInstance` is created with the model path, prompt, and `logits_all=True` if a probs run was selected
+4. **Text responses**: `model.generate_data(n)` queries the LLM N times and returns an `LLMOutputData`; saved to `~/.problm-solver/datasets/responses/`
+5. **Token + probability responses**: `model.query_log_probs()` queries once with `logprobs=True, top_logprobs=1` and returns an `LLMTokenData`; saved to `~/.problm-solver/datasets/probabilities/`
 6. Token sequences for statistical analysis are obtained by calling `model.get_tokenizer()` and applying `tokenizer.tokenize()` to each response in an `LLMOutputData`
 
 ---
@@ -257,7 +267,7 @@ This is installed into the venv's `bin/` by `uv sync` and is the target of `poe 
 ## Known Issues
 
 ### Active
-1. **Unreachable input validation loop** (`cli.py`, `main()`):
+1. **Unreachable input validation loop** (`cli.py`, `ui_gen_data()`):
    - `data_size = int(input(...))` either succeeds (always an `int`) or raises an exception
    - The `while not isinstance(data_size, int)` guard below it can never be reached
 
@@ -273,9 +283,6 @@ This is installed into the venv's `bin/` by `uv sync` and is the target of `poe 
 4. **`FBT001` on `_LlamaInterface` protocol** (`analysis/tokenizer.py`):
    - `add_bos: bool` and `special: bool` are flagged as boolean positional arguments
    - These mirror the external `llama_cpp.Llama` API signature and cannot be made keyword-only
-
-5. **`LLMTokenData` has no serialisation** (`data.py`):
-   - Unlike `LLMOutputData`, there are no `write()` / `read()` methods yet
 
 ### Resolved
 - ✓ `LLMOutputData.read()` implemented
@@ -293,3 +300,11 @@ This is installed into the venv's `bin/` by `uv sync` and is the target of `poe 
 - ✓ `ModelInstance.query_log_probs()` implemented using `logprobs=True` chat completion
 - ✓ `ModelInstance.get_tokenizer()` added as public accessor for `LlamaTokenizer`
 - ✓ Docstring convention changed from NumPy to reStructuredText (pep257 in ruff config)
+- ✓ `LLMTokenData.write()` and `read()` implemented; `TokenProbError` added for length mismatch validation
+- ✓ `json.loads(reader)` → `json.load(reader)` bug fixed in `LLMTokenData.read()`
+- ✓ `cli.py` dataset directories split: `DATA_DIR` replaced by `RESPONSES_DIR` and `PROBS_DIR`
+- ✓ `ui_get_probs()` completed; `ui_save_token_data()` added; `ui_select_function()` extracted from `main()`
+- ✓ `main()` reordered: function selection now happens before model load so `logits_all` is known at construction time
+- ✓ `ModelInstance.__init__` accepts `logits_all: bool = False`; `logits_all=True` set automatically for probs runs
+- ✓ `query_log_probs()` fixed: `top_logprobs=1` required alongside `logprobs=True` for llama_cpp chat handler to forward logprobs to the completion layer
+- ✓ `match`/`case` syntax bug fixed in `main()` (bare names are capture patterns, not value comparisons)
