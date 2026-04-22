@@ -3,7 +3,57 @@
 import numpy as np
 import pytest
 
-from problm_solver.analysis.probabilities import sample_from_logprobs
+from problm_solver.analysis.probabilities import prob_of_token, sample_from_logprobs
+
+
+class TestProbOfToken:
+    """Tests for prob_of_token."""
+
+    def test_returns_float(self) -> None:
+        """prob_of_token() returns a float."""
+        result = prob_of_token(' hello', {' hello': -0.5, ' world': -1.2})
+        assert isinstance(result, float)
+
+    def test_result_is_between_zero_and_one(self) -> None:
+        """The returned probability is in the range (0, 1]."""
+        result = prob_of_token(' hello', {' hello': -0.5, ' world': -1.2})
+        assert 0.0 < result <= 1.0
+
+    def test_single_token_returns_one(self) -> None:
+        """A single-entry dict gives a probability of 1.0."""
+        result = prob_of_token(' only', {' only': -99.9})
+        assert result == pytest.approx(1.0)
+
+    def test_dominant_token_has_high_probability(self) -> None:
+        """A token with a much higher log-prob gets a probability close to 1."""
+        result = prob_of_token(' yes', {' yes': 0.0, ' no': -1000.0})
+        assert result == pytest.approx(1.0, abs=1e-6)
+
+    def test_equal_logprobs_give_equal_probabilities(self) -> None:
+        """Tokens with equal log-probs each receive probability 1/N."""
+        lp = {' a': -1.0, ' b': -1.0, ' c': -1.0}
+        for token in lp:
+            assert prob_of_token(token, lp) == pytest.approx(1 / 3)
+
+    def test_probabilities_sum_to_one(self) -> None:
+        """Probabilities for all tokens in the dict sum to 1."""
+        log_probs = {' a': -0.1, ' b': -0.5, ' c': -1.0}
+        total = sum(prob_of_token(t, log_probs) for t in log_probs)
+        assert total == pytest.approx(1.0)
+
+    def test_raises_for_missing_token(self) -> None:
+        """prob_of_token raises when the requested token is not in the dict."""
+        with pytest.raises((KeyError, ValueError)):
+            prob_of_token(' missing', {' hello': -0.5})
+
+    def test_consistent_with_sample_from_logprobs_normalisation(self) -> None:
+        """prob_of_token and sample_from_logprobs use the same normalisation."""
+        log_probs = {' a': -0.2, ' b': -0.8}
+        prob_a = prob_of_token(' a', log_probs)
+        prob_b = prob_of_token(' b', log_probs)
+        assert prob_a + prob_b == pytest.approx(1.0)
+        assert prob_a > prob_b  # ' a' has higher log-prob so higher probability
+
 
 
 class TestSampleFromLogprobs:

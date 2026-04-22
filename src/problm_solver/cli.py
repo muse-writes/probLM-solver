@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from os.path import splitext
 from pathlib import Path
 
+from problm_solver.adjust_probs import AdjustProbPower
 from problm_solver.data import LLMOutputData, LLMTokenData
 from problm_solver.llama_interface import ModelInstance
 
@@ -12,9 +13,10 @@ MODELS_DIR = PROBLM_DIR / 'models'
 RESPONSES_DIR = PROBLM_DIR / 'datasets' / 'responses'
 PROBS_DIR = PROBLM_DIR / 'datasets' / 'probabilities'
 
-NUMBER_OF_FUNCTIONS = 2
+NUMBER_OF_FUNCTIONS = 3
 GEN_DATA = 1
 PROBS = 2
+GENERATE_ADJUSTED = 3
 
 
 class UnexpectedFunctionError(Exception):
@@ -52,6 +54,14 @@ def get_responses_path(model_path: Path) -> Path:
     """Return a timestamped .jsonl path inside RESPONSES_DIR for a response dataset."""
     timestamp = datetime.now(tz=UTC).strftime('%Y-%m-%d-%H:%M:%S')
     return RESPONSES_DIR / (splitext(model_path.name)[0] + '_' + timestamp + '.jsonl')
+
+def get_adjusted_path(model_path: Path) -> Path:
+    """Return a timestamped .json path inside RESPONSES_DIR for an adjusted response."""
+    timestamp = datetime.now(tz=UTC).strftime('%Y-%m-%d-%H:%M:%S')
+    return RESPONSES_DIR / (
+        'adjusted' + '_' + splitext(model_path.name)[0]
+        + '_' + timestamp + '.jsonl'
+    )
 
 
 def get_probs_path(model_path: Path) -> Path:
@@ -133,14 +143,30 @@ def ui_get_probs(model: ModelInstance, model_path: Path) -> None:
 
 def ui_select_function() -> int:
     """Prompt the user to select a program function and return their integer choice."""
-    print('Choose program function:')
+    print('\nChoose program function:')
     print('  [1] Generate LLM output data (gen_data run)')
     print('  [2] Get tokens and probabilities (probs run)')
+    print('  [3] Generate a response with adjusted probabilities (adjust run)')
     while True:
         choice = input(f'\nSelect a function (1-{NUMBER_OF_FUNCTIONS}): ').strip()
         if choice.isdigit() and 1 <= int(choice) <= NUMBER_OF_FUNCTIONS:
             return int(choice)
         print('Invalid choice, try again.')
+
+
+def ui_generate_adjusted(model: ModelInstance, model_path: Path) -> None:
+    """Handle user interface for getting model response using adjusted probability function."""
+    alpha = int(input('Please input the value of alpha, as an integer: '))
+    power_adjust_fn = AdjustProbPower(alpha=alpha)
+    top_m = int(input(
+        'Please input the number of most probable token candidates (M) to consider at each step: '
+    ))
+    max_tokens = int(input('Please input the maximum number of response tokens: '))
+    data = model.generate_adjusted(n_tokens=top_m, adjust_fn=power_adjust_fn, max_tokens=max_tokens)
+
+# Handle saving data
+    response_path = get_adjusted_path(model_path)
+    ui_save_data(str(response_path), data)
 
 
 def main() -> None:
@@ -154,13 +180,16 @@ def main() -> None:
         raise SystemExit(1)
 
     choice = ui_select_function()
-    model = ModelInstance(str(model_path), context, logits_all=(choice == PROBS))
+    use_logits: bool = choice in (PROBS, GENERATE_ADJUSTED)
+    model = ModelInstance(str(model_path), context, logits_all=use_logits)
 
     match choice:
         case 1:
             ui_gen_data(model, model_path)
         case 2:
             ui_get_probs(model, model_path)
+        case 3:
+            ui_generate_adjusted(model, model_path)
         case _:
             raise UnexpectedFunctionError
 

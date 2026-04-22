@@ -236,6 +236,14 @@ class TestQueryLogProbsNextToken:
         )
         return model_instance
 
+    def test_returns_none_when_top_logprobs_empty(self, next_token_model) -> None:
+        """Returns None when top_logprobs is empty, indicating EOS was generated."""
+        next_token_model._llm.create_completion.return_value = {
+            'choices': [{'logprobs': {'top_logprobs': []}, 'finish_reason': 'stop'}]
+        }
+        result = next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=2)
+        assert result is None
+
     def test_returns_llmnexttokendata(self, next_token_model) -> None:
         """query_log_probs_next_token() returns an LLMNextTokenData instance."""
         result = next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=2)
@@ -284,11 +292,18 @@ class TestFormatChatPrompt:
     @pytest.fixture()
     def chat_prompt_model(self, model_instance):
         """Configure the mock LLM for _format_chat_prompt."""
-        mock_handler_result = MagicMock()
-        mock_handler_result.prompt = 'formatted prompt string'
-        model_instance._llm._chat_handler.return_value = mock_handler_result
+        mock_result = MagicMock()
+        mock_result.prompt = 'formatted prompt string'
+        model_instance._llm.metadata = {'tokenizer.chat_template': 'dummy_template'}
+        model_instance._llm.token_eos.return_value = 2
+        model_instance._llm.token_bos.return_value = 1
+        model_instance._llm.detokenize.return_value = b''
         model_instance._llm.tokenize.return_value = [1, 2, 3, 4, 5]
-        return model_instance
+        with patch(
+            'problm_solver.llama_interface.Jinja2ChatFormatter'
+        ) as mock_jinja:
+            mock_jinja.return_value.return_value = mock_result
+            yield model_instance
 
     def test_returns_list(self, chat_prompt_model) -> None:
         """_format_chat_prompt() returns a list."""
@@ -300,12 +315,27 @@ class TestFormatChatPrompt:
         result = chat_prompt_model._format_chat_prompt()
         assert all(isinstance(x, int) for x in result)
 
-    def test_calls_chat_handler_with_user_message(self, chat_prompt_model) -> None:
-        """_chat_handler is called with the context as a user-role message."""
-        chat_prompt_model._format_chat_prompt()
-        _, kwargs = chat_prompt_model._llm._chat_handler.call_args
-        messages = kwargs.get('messages')
-        assert messages == [{'role': 'user', 'content': chat_prompt_model.context}]
+    def test_formatter_constructed_with_metadata_template(self, chat_prompt_model) -> None:
+        """Jinja2ChatFormatter is constructed using the template from model metadata."""
+        with patch('problm_solver.llama_interface.Jinja2ChatFormatter') as mock_jinja:
+            mock_result = MagicMock()
+            mock_result.prompt = 'p'
+            mock_jinja.return_value.return_value = mock_result
+            chat_prompt_model._format_chat_prompt()
+            args, kwargs = mock_jinja.call_args
+            assert kwargs.get('template') == 'dummy_template'
+
+    def test_formatter_called_with_user_message(self, chat_prompt_model) -> None:
+        """The formatter instance is called with the context as a user-role message."""
+        with patch('problm_solver.llama_interface.Jinja2ChatFormatter') as mock_jinja:
+            mock_result = MagicMock()
+            mock_result.prompt = 'p'
+            mock_jinja.return_value.return_value = mock_result
+            chat_prompt_model._format_chat_prompt()
+            _, kwargs = mock_jinja.return_value.call_args
+            assert kwargs.get('messages') == [
+                {'role': 'user', 'content': chat_prompt_model.context}
+            ]
 
     def test_calls_tokenize_with_handler_output(self, chat_prompt_model) -> None:
         """tokenize is called on the encoded string returned by the chat handler."""
@@ -352,6 +382,9 @@ def gen_adj_model(model_instance):
         stack.enter_context(
             patch('problm_solver.llama_interface.sample_from_logprobs', return_value=' hello')
         )
+        stack.enter_context(
+            patch('problm_solver.llama_interface.prob_of_token', return_value=0.8)
+        )
         yield model_instance
 
 
@@ -360,22 +393,22 @@ class TestGenerateAdjusted:
 
     def test_returns_llmoutputdata(self, gen_adj_model) -> None:
         """generate_adjusted() returns an LLMOutputData instance."""
-        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=3)
+        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=3)
         assert isinstance(result, LLMOutputData)
 
     def test_prompt_matches_context(self, gen_adj_model) -> None:
         """The prompt on the returned LLMOutputData matches the model's context."""
-        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=3)
+        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=3)
         assert result.prompt == gen_adj_model.context
 
     def test_written_flag_is_false(self, gen_adj_model) -> None:
         """Freshly generated data has written=False."""
-        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=3)
+        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=3)
         assert result.written is False
 
     def test_loops_exactly_max_tokens_times(self, gen_adj_model) -> None:
         """query_log_probs_next_token is called exactly max_tokens times when EOS never appears."""
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=4)
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=4)
         assert gen_adj_model.query_log_probs_next_token.call_count == 4
 
     def test_adjust_fn_called_each_step(self, gen_adj_model) -> None:
@@ -391,20 +424,51 @@ class TestGenerateAdjusted:
         args, _ = adjust_fn.call_args
         assert args[0] == {' hello': -0.5, ' world': -1.2}
 
+    def test_adjust_fn_receives_empty_prev_probs_on_first_step(self, gen_adj_model) -> None:
+        """adjust_fn receives an empty prev_probs list on the very first step."""
+        adjust_fn = MagicMock(return_value={' hello': -0.5})
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=1)
+        args, _ = adjust_fn.call_args_list[0]
+        assert args[1] == []
+
+    def test_adjust_fn_receives_growing_prev_probs(self, gen_adj_model) -> None:
+        """prev_probs grows by one entry per step, containing prob_of_token return values."""
+        adjust_fn = MagicMock(return_value={' hello': -0.5})
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=3)
+        # Step 1: prev_probs = []; step 2: [0.8]; step 3: [0.8, 0.8]
+        assert adjust_fn.call_args_list[0][0][1] == []
+        assert adjust_fn.call_args_list[1][0][1] == [0.8]
+        assert adjust_fn.call_args_list[2][0][1] == [0.8, 0.8]
+
     def test_response_decoded_from_detokenize(self, gen_adj_model) -> None:
         """The response string in the result comes from decoding the generated token IDs."""
-        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=2)
+        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=2)
         assert result.data[0] == ' hello world'
+
+    def test_stops_when_query_returns_none(self, gen_adj_model) -> None:
+        """The loop breaks immediately when query_log_probs_next_token returns None."""
+        gen_adj_model.query_log_probs_next_token.return_value = None
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=10)
+        assert gen_adj_model.query_log_probs_next_token.call_count == 1
 
     def test_stops_early_on_eos_token(self, gen_adj_model) -> None:
         """The loop breaks before max_tokens when tokenize returns the EOS token ID."""
-        # EOS ID is 0; override tokenize to return it immediately
         gen_adj_model._llm.tokenize.return_value = [0]
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=10)
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=10)
         assert gen_adj_model.query_log_probs_next_token.call_count == 1
 
     def test_stops_early_on_empty_token_ids(self, gen_adj_model) -> None:
         """The loop breaks when tokenize returns an empty list for the sampled token."""
         gen_adj_model._llm.tokenize.return_value = []
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=10)
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=10)
         assert gen_adj_model.query_log_probs_next_token.call_count == 1
+
+    def test_prev_probs_reset_between_calls(self, gen_adj_model) -> None:
+        """prev_probs starts empty on every call to generate_adjusted, not carried over."""
+        adjust_fn = MagicMock(return_value={' hello': -0.5})
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=2)
+        gen_adj_model.query_log_probs_next_token.reset_mock()
+        adjust_fn.reset_mock()
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=1)
+        args, _ = adjust_fn.call_args_list[0]
+        assert args[1] == []
