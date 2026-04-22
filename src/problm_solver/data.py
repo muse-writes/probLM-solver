@@ -6,8 +6,6 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from problm_solver.analysis import TokenSequence
-
 
 class LLMOutputData:
     """Stores LLM output data and handles serialization."""
@@ -64,7 +62,7 @@ class TokenProbError(ValueError):
 class LLMTokenData:
     """Store a single tokenized LLM response paired with per-token probabilities."""
 
-    def __init__(self, prompt: str, tokens: TokenSequence, probs: list[float]) -> None:
+    def __init__(self, prompt: str, tokens: list[str], probs: list[float]) -> None:
         """Initialize.
 
         :param prompt: The prompt used to generate the response.
@@ -73,7 +71,7 @@ class LLMTokenData:
             Must be the same length as ``tokens``.
         """
         if len(tokens) != len(probs):
-            raise TokenProbError(self)
+            raise TokenProbError(type(self))
         self.prompt = prompt
         self.tokens = tokens
         self.probs = probs
@@ -102,4 +100,48 @@ class LLMTokenData:
             self.prompt = data['prompt']
             self.tokens = data['tokens']
             self.probs = data['probs']
+        self.written = True
+
+class LLMNextTokenData:
+    """Store M most likely next tokens given context and output vector."""
+
+    def __init__(
+        self,
+        prompt: str,
+        output_vec: list[int],
+        top_m_tokens: dict[str, float],
+    ) -> None:
+        """Initialize context and next token data.
+
+        :param prompt: The original user prompt.
+        :param output_vec: The current token ID sequence (prompt + generated
+            tokens so far).
+        :param top_m_tokens: Mapping of token string to log-probability for
+            the top M candidate next tokens at this position.
+        """
+        self.prompt = prompt
+        self.output_vec = output_vec
+        self.top_m_tokens = top_m_tokens
+        self.written = False
+
+
+    def write(self, fname: str) -> None:
+        """Save data to a file in JSON format."""
+        with open(fname, 'w', encoding='utf-8') as writer:
+            record = {
+                'prompt': self.prompt,
+                'output_vec': self.output_vec,
+                'top_m_tokens': self.top_m_tokens,
+            }
+            writer.write(json.dumps(record))
+        self.written = True
+
+
+    def read(self, fname: str) -> None:
+        """Read from JSON file."""
+        with open(fname, encoding='utf-8') as reader:
+            data = json.load(reader)
+            self.prompt = data['prompt']
+            self.output_vec = data['output_vec']
+            self.top_m_tokens = data['top_m_tokens']
         self.written = True

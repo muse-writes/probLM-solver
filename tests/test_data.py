@@ -362,10 +362,199 @@ class TestLLMTokenDataRead:
         assert obj.written is True
 
 
+class TestLLMNextTokenDataInit:
+    """Tests for LLMNextTokenData.__init__."""
+
+    @pytest.fixture()
+    def sample_next_token_data(self):
+        """Return a small LLMNextTokenData instance for reuse."""
+        from problm_solver.data import LLMNextTokenData
+
+        return LLMNextTokenData(
+            prompt='What is 2+2?',
+            output_vec=[1, 2, 3],
+            top_m_tokens={' Four': -0.5, ' four': -1.2, ' 4': -1.8},
+        )
+
+    def test_stores_prompt(self, sample_next_token_data) -> None:
+        """prompt attribute is set correctly on construction."""
+        assert sample_next_token_data.prompt == 'What is 2+2?'
+
+    def test_stores_output_vec(self, sample_next_token_data) -> None:
+        """output_vec attribute is set correctly on construction."""
+        assert sample_next_token_data.output_vec == [1, 2, 3]
+
+    def test_output_vec_is_list_of_ints(self, sample_next_token_data) -> None:
+        """output_vec is a list of integers (token IDs, not strings)."""
+        assert all(isinstance(x, int) for x in sample_next_token_data.output_vec)
+
+    def test_stores_top_m_tokens(self, sample_next_token_data) -> None:
+        """top_m_tokens attribute is set correctly on construction."""
+        assert sample_next_token_data.top_m_tokens == {' Four': -0.5, ' four': -1.2, ' 4': -1.8}
+
+    def test_written_is_false_on_init(self, sample_next_token_data) -> None:
+        """written flag starts as False — no disk I/O has occurred yet."""
+        assert sample_next_token_data.written is False
+
+
+@pytest.fixture()
+def sample_next_token_data():
+    """Module-level LLMNextTokenData fixture for write/read/roundtrip tests."""
+    from problm_solver.data import LLMNextTokenData
+
+    return LLMNextTokenData(
+        prompt='What is 2+2?',
+        output_vec=[1, 2, 3],
+        top_m_tokens={' Four': -0.5, ' four': -1.2, ' 4': -1.8},
+    )
+
+
+class TestLLMNextTokenDataWrite:
+    """Tests for LLMNextTokenData.write."""
+
+    def test_creates_file(self, sample_next_token_data, tmp_path) -> None:
+        """write() creates the output file."""
+        out = tmp_path / 'output.json'
+        sample_next_token_data.write(str(out))
+        assert out.exists()
+
+    def test_sets_written_flag(self, sample_next_token_data, tmp_path) -> None:
+        """write() sets written to True."""
+        out = tmp_path / 'output.json'
+        sample_next_token_data.write(str(out))
+        assert sample_next_token_data.written is True
+
+    def test_output_is_valid_json(self, sample_next_token_data, tmp_path) -> None:
+        """The output file contains valid JSON."""
+        out = tmp_path / 'output.json'
+        sample_next_token_data.write(str(out))
+        json.loads(out.read_text(encoding='utf-8'))  # raises if invalid
+
+    def test_record_has_prompt_field(self, sample_next_token_data, tmp_path) -> None:
+        """The JSON record contains a 'prompt' key."""
+        out = tmp_path / 'output.json'
+        sample_next_token_data.write(str(out))
+        assert 'prompt' in json.loads(out.read_text(encoding='utf-8'))
+
+    def test_record_has_output_vec_field(self, sample_next_token_data, tmp_path) -> None:
+        """The JSON record contains an 'output_vec' key."""
+        out = tmp_path / 'output.json'
+        sample_next_token_data.write(str(out))
+        assert 'output_vec' in json.loads(out.read_text(encoding='utf-8'))
+
+    def test_record_has_top_m_tokens_field(self, sample_next_token_data, tmp_path) -> None:
+        """The JSON record contains a 'top_m_tokens' key."""
+        out = tmp_path / 'output.json'
+        sample_next_token_data.write(str(out))
+        assert 'top_m_tokens' in json.loads(out.read_text(encoding='utf-8'))
+
+    def test_prompt_matches(self, sample_next_token_data, tmp_path) -> None:
+        """The prompt written to disk matches the in-memory value."""
+        out = tmp_path / 'output.json'
+        sample_next_token_data.write(str(out))
+        assert json.loads(out.read_text(encoding='utf-8'))['prompt'] == sample_next_token_data.prompt
+
+    def test_output_vec_matches(self, sample_next_token_data, tmp_path) -> None:
+        """The output_vec written to disk matches the in-memory value."""
+        out = tmp_path / 'output.json'
+        sample_next_token_data.write(str(out))
+        assert json.loads(out.read_text(encoding='utf-8'))['output_vec'] == sample_next_token_data.output_vec
+
+    def test_top_m_tokens_matches(self, sample_next_token_data, tmp_path) -> None:
+        """The top_m_tokens dict written to disk matches the in-memory value."""
+        out = tmp_path / 'output.json'
+        sample_next_token_data.write(str(out))
+        record = json.loads(out.read_text(encoding='utf-8'))
+        assert record['top_m_tokens'] == pytest.approx(sample_next_token_data.top_m_tokens)
+
+
+class TestLLMNextTokenDataRead:
+    """Tests for LLMNextTokenData.read."""
+
+    def _make_json(self, tmp_path, prompt, output_vec, top_m_tokens) -> str:
+        """Write a JSON fixture file and return its path string."""
+        out = tmp_path / 'fixture.json'
+        out.write_text(
+            json.dumps({'prompt': prompt, 'output_vec': output_vec, 'top_m_tokens': top_m_tokens}),
+            encoding='utf-8',
+        )
+        return str(out)
+
+    def test_populates_prompt(self, tmp_path) -> None:
+        """read() sets self.prompt from the file contents."""
+        from problm_solver.data import LLMNextTokenData
+
+        path = self._make_json(tmp_path, 'Hello?', [1, 2], {' hi': -0.3})
+        obj = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        obj.read(path)
+        assert obj.prompt == 'Hello?'
+
+    def test_populates_output_vec(self, tmp_path) -> None:
+        """read() sets self.output_vec from the file contents."""
+        from problm_solver.data import LLMNextTokenData
+
+        path = self._make_json(tmp_path, 'Q?', [10, 20, 30], {' a': -0.5})
+        obj = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        obj.read(path)
+        assert obj.output_vec == [10, 20, 30]
+
+    def test_populates_top_m_tokens(self, tmp_path) -> None:
+        """read() sets self.top_m_tokens from the file contents."""
+        from problm_solver.data import LLMNextTokenData
+
+        path = self._make_json(tmp_path, 'Q?', [1], {' yes': -0.1, ' no': -2.3})
+        obj = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        obj.read(path)
+        assert obj.top_m_tokens == pytest.approx({' yes': -0.1, ' no': -2.3})
+
+    def test_sets_written_flag(self, tmp_path) -> None:
+        """read() sets written to True — the object is now in sync with disk."""
+        from problm_solver.data import LLMNextTokenData
+
+        path = self._make_json(tmp_path, 'Q?', [1, 2], {' a': -0.5})
+        obj = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        obj.read(path)
+        assert obj.written is True
+
+
+class TestLLMNextTokenDataRoundtrip:
+    """Tests for LLMNextTokenData write-then-read consistency."""
+
+    def test_roundtrip_preserves_prompt(self, sample_next_token_data, tmp_path) -> None:
+        """A write-then-read cycle preserves the prompt exactly."""
+        from problm_solver.data import LLMNextTokenData
+
+        out = tmp_path / 'round.json'
+        sample_next_token_data.write(str(out))
+        recovered = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        recovered.read(str(out))
+        assert recovered.prompt == sample_next_token_data.prompt
+
+    def test_roundtrip_preserves_output_vec(self, sample_next_token_data, tmp_path) -> None:
+        """A write-then-read cycle preserves output_vec exactly."""
+        from problm_solver.data import LLMNextTokenData
+
+        out = tmp_path / 'round.json'
+        sample_next_token_data.write(str(out))
+        recovered = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        recovered.read(str(out))
+        assert recovered.output_vec == sample_next_token_data.output_vec
+
+    def test_roundtrip_preserves_top_m_tokens(self, sample_next_token_data, tmp_path) -> None:
+        """A write-then-read cycle preserves top_m_tokens exactly."""
+        from problm_solver.data import LLMNextTokenData
+
+        out = tmp_path / 'round.json'
+        sample_next_token_data.write(str(out))
+        recovered = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        recovered.read(str(out))
+        assert recovered.top_m_tokens == pytest.approx(sample_next_token_data.top_m_tokens)
+
+
 class TestLLMTokenDataRoundtrip:
     """Tests for LLMTokenData write-then-read consistency."""
 
-    def test_roundtrip_preserves_prompt(self, sample_token_data, tmp_path: pytest.TempPathFactory) -> None:
+    def test_roundtrip_preserves_prompt(self, sample_token_data, tmp_path) -> None:
         """A write-then-read cycle preserves the prompt exactly."""
         from problm_solver.data import LLMTokenData
 
@@ -375,7 +564,7 @@ class TestLLMTokenDataRoundtrip:
         recovered.read(str(out))
         assert recovered.prompt == sample_token_data.prompt
 
-    def test_roundtrip_preserves_tokens(self, sample_token_data, tmp_path: pytest.TempPathFactory) -> None:
+    def test_roundtrip_preserves_tokens(self, sample_token_data, tmp_path) -> None:
         """A write-then-read cycle preserves the token list exactly."""
         from problm_solver.data import LLMTokenData
 
@@ -385,7 +574,7 @@ class TestLLMTokenDataRoundtrip:
         recovered.read(str(out))
         assert recovered.tokens == sample_token_data.tokens
 
-    def test_roundtrip_preserves_probs(self, sample_token_data, tmp_path: pytest.TempPathFactory) -> None:
+    def test_roundtrip_preserves_probs(self, sample_token_data, tmp_path) -> None:
         """A write-then-read cycle preserves all probabilities exactly."""
         from problm_solver.data import LLMTokenData
 

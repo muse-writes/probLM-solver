@@ -8,6 +8,26 @@ import numpy.typing as npt
 from problm_solver.data import LLMOutputData
 
 
+def sample_from_logprobs(log_probs: dict[str, float]) -> str:
+    """Sample a token from a log-probability distribution.
+
+    Converts log-probabilities to probabilities via ``exp()``, renormalises,
+    and returns a single sampled token string.
+
+    :param log_probs: Mapping of token string to log-probability. Values do
+        not need to correspond to a normalised distribution — renormalisation
+        is applied before sampling.
+    :returns: A single sampled token string drawn from the distribution.
+    """
+    tokens = list(log_probs.keys())
+    lp = np.array([log_probs[t] for t in tokens], dtype=np.float64)
+    lp -= lp.max()  # shift for numerical stability before exp
+    probs = np.exp(lp)
+    probs /= probs.sum()
+    idx: int = int(np.random.choice(len(tokens), p=probs))
+    return tokens[idx]
+
+
 class Probabilities:
     """Probabilities associated with a dataset."""
 

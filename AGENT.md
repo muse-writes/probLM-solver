@@ -62,6 +62,11 @@ probLM-solver/
 
 - `TokenProbError(ValueError)`: Raised by `LLMTokenData.__init__` when `len(tokens) != len(probs)`
 
+- `LLMNextTokenData`: Stores the top-M most likely next tokens and their log-probabilities given a prompt and current output vector
+  - `__init__(prompt: str, output_vec: TokenSequence, top_m_tokens: dict)`: `output_vec` is the token sequence generated so far; `top_m_tokens` is a `dict[str, float]` of token string → log-prob as returned by the llama_cpp API
+  - `write(fname: str)`: **stub — not yet implemented**
+  - `read(fname: str)`: **stub — not yet implemented**
+
 **Dependencies**: `json`, `numpy`, `problm_solver.analysis`
 
 ---
@@ -76,6 +81,7 @@ probLM-solver/
   - `query_n_times(n: int) -> npt.NDArray[Any]`: Calls `query()` N times, returns numpy array
   - `generate_data(n_samples: int) -> LLMOutputData`: Calls `query_n_times()` and wraps result in `LLMOutputData`
   - `query_log_probs() -> LLMTokenData`: Single inference call with `logprobs=True, top_logprobs=1`; extracts token strings and probabilities (`exp(logprob)`) directly from the API response; returns `LLMTokenData`
+  - `query_log_probs_next_token(context_tokens: list[int], n_tokens: int) -> LLMNextTokenData`: Calls `create_completion()` with `max_tokens=1` and `top_logprobs=n_tokens` to get the top-M candidate next tokens at the current position; `context_tokens` is a list of integer token IDs; returns `LLMNextTokenData` with the top-M `{token_str: log_prob}` dict
   - `get_tokenizer() -> LlamaTokenizer`: Returns a `LlamaTokenizer` backed by this model's `Llama` instance
 
 **Dependencies**: `math`, `llama_cpp`, `numpy`, `problm_solver.data`, `problm_solver.analysis.tokenizer`
@@ -151,6 +157,45 @@ Re-exports the public API of the `analysis` subpackage:
 - `B007`: Loop variables `ii` and `data_entry` unused
 
 **Dependencies**: `numpy`, `problm_solver.data`
+
+---
+
+---
+
+## Planned: `generate_adjusted()` — Adjusted Probability Generation Loop
+
+This feature is planned but not yet implemented. It enables token-by-token generation where the model's next-token probability distribution can be intercepted and modified at each step — something `create_chat_completion()` does not allow since it manages the full loop internally.
+
+### Implementation steps
+
+1. **Complete `LLMNextTokenData.write()` and `read()`** — needed before anything depends on this class; JSON format mirroring `LLMTokenData` with `prompt`, `output_vec`, and `top_m_tokens` fields.
+
+2. **`ModelInstance._format_chat_prompt(prompt: str) -> list[int]`** — private method that applies the model's chat template to the user prompt and returns the result as a list of token IDs via `_llm.tokenize()`. This bridges the gap between the chat API and the raw `create_completion()` API used by `query_log_probs_next_token`.
+
+3. **`AdjustFn` type alias** (in `llama_interface.py` or `analysis/`):
+   ```python
+   AdjustFn = Callable[[dict[str, float]], dict[str, float]]
+   ```
+   Receives the top-M `{token_str: log_prob}` dict and returns a modified log-prob dict. Values do not need to sum to any particular total — renormalisation is handled downstream.
+
+4. **Token sampling utility** (in `analysis/probabilities.py`) — pure function that takes the adjusted log-prob dict, converts via `exp()`, renormalises, and samples a token string.
+
+5. **`ModelInstance.generate_adjusted(n_tokens, adjust_fn, max_tokens) -> LLMOutputData`** — the main generation loop:
+   - Calls `_format_chat_prompt(self.context)` to get the initial `list[int]` context
+   - Loops up to `max_tokens`:
+     1. Calls `query_log_probs_next_token(context, n_tokens)` for top-M candidates
+     2. Passes `top_m_tokens` to `adjust_fn`
+     3. Samples next token string from adjusted log-prob distribution
+     4. Converts sampled token string back to its token ID via `_llm.tokenize()` and appends to context
+     5. Breaks on EOS token
+   - Decodes the full generated token ID sequence to a string and returns it wrapped in `LLMOutputData`
+
+### Key design decisions
+- **Context stored as `list[int]`** (token IDs) — passed directly to `create_completion()`, no re-tokenisation of the growing context at each step
+- **`adjust_fn` operates on log-probabilities** — numerically safer than probabilities; users work with the values as returned by the model
+- **`generate_adjusted()` returns `LLMOutputData`** for now
+
+> **TODO**: Replace `LLMOutputData` return type with a richer container that records the full sequence of `LLMNextTokenData` snapshots (one per generated token), giving access to the adjusted conditional distributions at each step. This would enable post-hoc analysis of how the adjustments affected the generation trajectory.
 
 ---
 

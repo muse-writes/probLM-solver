@@ -1,11 +1,12 @@
 """Tests for ModelInstance in llama_interface.py."""
 
+from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-from problm_solver.data import LLMOutputData
+from problm_solver.data import LLMNextTokenData, LLMOutputData
 
 
 def _make_llama_mock(response_text: str = 'Mock response.') -> MagicMock:
@@ -212,3 +213,198 @@ class TestModelInstanceGenerateData:
         """Freshly generated data has written=False — it hasn't been saved yet."""
         result = model_instance.generate_data(2)
         assert result.written is False
+
+
+def _make_next_token_completion(top_logprobs: dict) -> dict:
+    """Build a create_completion return value with the given top_logprobs dict."""
+    return {
+        'choices': [{
+            'logprobs': {'top_logprobs': [top_logprobs]},
+            'finish_reason': 'length',
+        }]
+    }
+
+
+class TestQueryLogProbsNextToken:
+    """Tests for ModelInstance.query_log_probs_next_token."""
+
+    @pytest.fixture()
+    def next_token_model(self, model_instance):
+        """Configure the mock LLM to return a next-token completion response."""
+        model_instance._llm.create_completion.return_value = _make_next_token_completion(
+            {' Four': -0.5, ' four': -1.2}
+        )
+        return model_instance
+
+    def test_returns_llmnexttokendata(self, next_token_model) -> None:
+        """query_log_probs_next_token() returns an LLMNextTokenData instance."""
+        result = next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=2)
+        assert isinstance(result, LLMNextTokenData)
+
+    def test_output_vec_is_passed_context(self, next_token_model) -> None:
+        """output_vec on the result is the context list that was passed in."""
+        context = [1, 2, 3]
+        result = next_token_model.query_log_probs_next_token(context, n_tokens=2)
+        assert result.output_vec == context
+
+    def test_top_m_tokens_extracted_correctly(self, next_token_model) -> None:
+        """top_m_tokens contains the dict returned by the API's top_logprobs."""
+        result = next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=2)
+        assert result.top_m_tokens == {' Four': -0.5, ' four': -1.2}
+
+    def test_passes_max_tokens_one(self, next_token_model) -> None:
+        """create_completion is called with max_tokens=1 to get a single next token."""
+        next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=2)
+        _, kwargs = next_token_model._llm.create_completion.call_args
+        assert kwargs.get('max_tokens') == 1
+
+    def test_passes_logprobs_true(self, next_token_model) -> None:
+        """create_completion is called with logprobs=True."""
+        next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=2)
+        _, kwargs = next_token_model._llm.create_completion.call_args
+        assert kwargs.get('logprobs') is True
+
+    def test_passes_top_logprobs_n_tokens(self, next_token_model) -> None:
+        """create_completion is called with top_logprobs equal to the requested n_tokens."""
+        next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=5)
+        _, kwargs = next_token_model._llm.create_completion.call_args
+        assert kwargs.get('top_logprobs') == 5
+
+    def test_passes_context_as_prompt(self, next_token_model) -> None:
+        """create_completion receives the context list as its positional prompt argument."""
+        context = [10, 20, 30]
+        next_token_model.query_log_probs_next_token(context, n_tokens=2)
+        args, _ = next_token_model._llm.create_completion.call_args
+        assert args[0] == context
+
+
+class TestFormatChatPrompt:
+    """Tests for ModelInstance._format_chat_prompt."""
+
+    @pytest.fixture()
+    def chat_prompt_model(self, model_instance):
+        """Configure the mock LLM for _format_chat_prompt."""
+        mock_handler_result = MagicMock()
+        mock_handler_result.prompt = 'formatted prompt string'
+        model_instance._llm._chat_handler.return_value = mock_handler_result
+        model_instance._llm.tokenize.return_value = [1, 2, 3, 4, 5]
+        return model_instance
+
+    def test_returns_list(self, chat_prompt_model) -> None:
+        """_format_chat_prompt() returns a list."""
+        result = chat_prompt_model._format_chat_prompt()
+        assert isinstance(result, list)
+
+    def test_returns_list_of_ints(self, chat_prompt_model) -> None:
+        """All elements in the returned list are integers (token IDs)."""
+        result = chat_prompt_model._format_chat_prompt()
+        assert all(isinstance(x, int) for x in result)
+
+    def test_calls_chat_handler_with_user_message(self, chat_prompt_model) -> None:
+        """_chat_handler is called with the context as a user-role message."""
+        chat_prompt_model._format_chat_prompt()
+        _, kwargs = chat_prompt_model._llm._chat_handler.call_args
+        messages = kwargs.get('messages')
+        assert messages == [{'role': 'user', 'content': chat_prompt_model.context}]
+
+    def test_calls_tokenize_with_handler_output(self, chat_prompt_model) -> None:
+        """tokenize is called on the encoded string returned by the chat handler."""
+        chat_prompt_model._format_chat_prompt()
+        chat_prompt_model._llm.tokenize.assert_called_once_with(
+            'formatted prompt string'.encode('utf-8'),
+            add_bos=False,
+            special=True,
+        )
+
+    def test_returns_tokenize_output(self, chat_prompt_model) -> None:
+        """The return value is whatever tokenize() returns."""
+        result = chat_prompt_model._format_chat_prompt()
+        assert result == [1, 2, 3, 4, 5]
+
+
+@pytest.fixture()
+def gen_adj_model(model_instance):
+    """ModelInstance with all generate_adjusted() dependencies mocked.
+
+    - _format_chat_prompt returns [10, 20, 30] (prompt_length = 3)
+    - query_log_probs_next_token returns stable LLMNextTokenData each call
+    - sample_from_logprobs (in llama_interface module) returns ' hello'
+    - _llm.token_eos() returns 0 (EOS ID)
+    - _llm.tokenize() returns [42] (a non-EOS token ID)
+    - _llm.detokenize() returns b' hello world'
+    """
+    next_token_data = LLMNextTokenData(
+        prompt=model_instance.context,
+        output_vec=[10, 20, 30],
+        top_m_tokens={' hello': -0.5, ' world': -1.2},
+    )
+    model_instance._llm.token_eos.return_value = 0
+    model_instance._llm.tokenize.return_value = [42]
+    model_instance._llm.detokenize.return_value = b' hello world'
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(model_instance, '_format_chat_prompt', return_value=[10, 20, 30])
+        )
+        stack.enter_context(
+            patch.object(model_instance, 'query_log_probs_next_token', return_value=next_token_data)
+        )
+        stack.enter_context(
+            patch('problm_solver.llama_interface.sample_from_logprobs', return_value=' hello')
+        )
+        yield model_instance
+
+
+class TestGenerateAdjusted:
+    """Tests for ModelInstance.generate_adjusted."""
+
+    def test_returns_llmoutputdata(self, gen_adj_model) -> None:
+        """generate_adjusted() returns an LLMOutputData instance."""
+        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=3)
+        assert isinstance(result, LLMOutputData)
+
+    def test_prompt_matches_context(self, gen_adj_model) -> None:
+        """The prompt on the returned LLMOutputData matches the model's context."""
+        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=3)
+        assert result.prompt == gen_adj_model.context
+
+    def test_written_flag_is_false(self, gen_adj_model) -> None:
+        """Freshly generated data has written=False."""
+        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=3)
+        assert result.written is False
+
+    def test_loops_exactly_max_tokens_times(self, gen_adj_model) -> None:
+        """query_log_probs_next_token is called exactly max_tokens times when EOS never appears."""
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=4)
+        assert gen_adj_model.query_log_probs_next_token.call_count == 4
+
+    def test_adjust_fn_called_each_step(self, gen_adj_model) -> None:
+        """adjust_fn is called once per generated token with the top_m_tokens dict."""
+        adjust_fn = MagicMock(return_value={' hello': -0.5})
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=3)
+        assert adjust_fn.call_count == 3
+
+    def test_adjust_fn_receives_top_m_tokens(self, gen_adj_model) -> None:
+        """adjust_fn is called with the top_m_tokens from LLMNextTokenData each step."""
+        adjust_fn = MagicMock(return_value={' hello': -0.5})
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=1)
+        args, _ = adjust_fn.call_args
+        assert args[0] == {' hello': -0.5, ' world': -1.2}
+
+    def test_response_decoded_from_detokenize(self, gen_adj_model) -> None:
+        """The response string in the result comes from decoding the generated token IDs."""
+        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=2)
+        assert result.data[0] == ' hello world'
+
+    def test_stops_early_on_eos_token(self, gen_adj_model) -> None:
+        """The loop breaks before max_tokens when tokenize returns the EOS token ID."""
+        # EOS ID is 0; override tokenize to return it immediately
+        gen_adj_model._llm.tokenize.return_value = [0]
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=10)
+        assert gen_adj_model.query_log_probs_next_token.call_count == 1
+
+    def test_stops_early_on_empty_token_ids(self, gen_adj_model) -> None:
+        """The loop breaks when tokenize returns an empty list for the sampled token."""
+        gen_adj_model._llm.tokenize.return_value = []
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x: x, max_tokens=10)
+        assert gen_adj_model.query_log_probs_next_token.call_count == 1
