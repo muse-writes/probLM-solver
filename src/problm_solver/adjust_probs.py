@@ -8,6 +8,7 @@ import numpy as np
 import numpy.typing as npt
 
 from problm_solver.analysis.probabilities import prob_of_token, sample_from_logprobs
+from problm_solver.utils import _as_rng
 
 
 @dataclass
@@ -174,12 +175,14 @@ class MetropolisSampler(BranchSampler):
         min_branches: int = 5,
         max_branches: int = 50,
         tolerance: float = 1e-2,
+        rng: np.random.Generator | int | None = None
     ) -> None:
         """Initialise with convergence parameters."""
         self._current_log_prob: float | None = None
         self._min_branches = min_branches
         self._max_branches = max_branches
         self._tolerance = tolerance
+        self._rng = _as_rng(rng)
 
     def reset(self) -> None:
         """Clear chain state before starting a new candidate-token chain."""
@@ -216,7 +219,7 @@ class MetropolisSampler(BranchSampler):
             + reverse_log_q
             - forward_log_q
         )
-        if np.log(np.random.random()) < min(0.0, log_accept_ratio):
+        if np.log(self._rng.random()) < min(0.0, log_accept_ratio):
             self._current_log_prob = proposed_log_prob
 
         return self._current_log_prob

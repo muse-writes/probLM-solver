@@ -1,11 +1,9 @@
-"""Evaluates token probabilities from a probLM-solver dataset."""
+"""Utilities for sampling tokens and getting token probabilities."""
 
-from typing import Any
 
 import numpy as np
-import numpy.typing as npt
 
-from problm_solver.data import LLMOutputData
+from problm_solver.utils import _as_rng
 
 
 def prob_of_token(token: str, log_probs: dict[str, float]) -> float:
@@ -29,7 +27,10 @@ def prob_of_token(token: str, log_probs: dict[str, float]) -> float:
     return float(probs[tokens.index(token)])
 
 
-def sample_from_logprobs(log_probs: dict[str, float]) -> str:
+def sample_from_logprobs(
+    log_probs: dict[str, float],
+    rng: np.random.Generator | int | None = None
+) -> str:
     """Sample a token from a log-probability distribution.
 
     Converts log-probabilities to probabilities via ``exp()``, renormalises,
@@ -45,5 +46,6 @@ def sample_from_logprobs(log_probs: dict[str, float]) -> str:
     lp -= lp.max()  # shift for numerical stability before exp
     probs = np.exp(lp)
     probs /= probs.sum()
-    idx: int = int(np.random.choice(len(tokens), p=probs))
+    rng = _as_rng(rng)
+    idx: int = int(rng.choice(len(tokens), p=probs))
     return tokens[idx]
