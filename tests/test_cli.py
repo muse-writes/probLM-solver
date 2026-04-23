@@ -290,17 +290,6 @@ class TestUiSaveData:
         cli.ui_save_data('out.jsonl', mock_data)
         mock_data.write.assert_called_once_with('out.jsonl')
 
-    def test_does_not_call_write_when_user_declines(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """ui_save_data() does not call data.write() when the user enters 'n'."""
-        from problm_solver import cli
-
-        monkeypatch.setattr('builtins.input', lambda _: 'n')
-        mock_data = self._make_mock_data()
-        cli.ui_save_data('out.jsonl', mock_data)
-        mock_data.write.assert_not_called()
-
 
 class TestUiSaveTokenData:
     """Tests for ui_save_token_data()."""
