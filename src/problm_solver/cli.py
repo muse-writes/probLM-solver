@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from os.path import splitext
 from pathlib import Path
 
-from problm_solver.adjust_probs import SampleLowTemp
+from problm_solver.adjust_probs import MetropolisSampler, SampleLowTemp, SamplePowerDist
 from problm_solver.data import LLMOutputData, LLMTokenData
 from problm_solver.llama_interface import ModelInstance
 
@@ -13,10 +13,11 @@ MODELS_DIR = PROBLM_DIR / 'models'
 RESPONSES_DIR = PROBLM_DIR / 'datasets' / 'responses'
 PROBS_DIR = PROBLM_DIR / 'datasets' / 'probabilities'
 
-NUMBER_OF_FUNCTIONS = 3
+NUMBER_OF_FUNCTIONS = 4
 GEN_DATA = 1
 PROBS = 2
-GENERATE_ADJUSTED = 3
+LOW_TEMP = 3
+POWER_SAMPLING = 4
 
 
 class UnexpectedFunctionError(Exception):
@@ -115,7 +116,12 @@ def ui_save_data(fname: str, data: LLMOutputData) -> None:
             data.write(fname)
             resolved = True
         elif response.lower() == 'n':
-            print('Aborted saving.')
+            fname = input('Enter alternative file name or leave blank to discard: ')
+            if fname is not None:
+                fname = str(RESPONSES_DIR / fname)
+                data.write(fname)
+            else:
+                print('Aborted saving.')
             resolved = True
 
 
@@ -146,7 +152,8 @@ def ui_select_function() -> int:
     print('\nChoose program function:')
     print('  [1] Generate LLM output data (gen_data run)')
     print('  [2] Get tokens and probabilities (probs run)')
-    print('  [3] Generate a response with adjusted probabilities (adjust run)')
+    print('  [3] Generate a response with low-temp sampling (low_temp run)')
+    print('  [4] Generate a response with MCMC power sampling (power_mcmc run)')
     while True:
         choice = input(f'\nSelect a function (1-{NUMBER_OF_FUNCTIONS}): ').strip()
         if choice.isdigit() and 1 <= int(choice) <= NUMBER_OF_FUNCTIONS:
@@ -154,8 +161,9 @@ def ui_select_function() -> int:
         print('Invalid choice, try again.')
 
 
-def ui_generate_adjusted(model: ModelInstance, model_path: Path) -> None:
-    """Handle user interface for getting model response using adjusted probability function."""
+def ui_generate_low_temp(model: ModelInstance, model_path: Path) -> None:
+    """Handle user interface for getting model response using low temp sampling."""
+    print('\nGenerating output from low-temp sampling.')
     alpha = float(input('Please input the value of alpha, as a float: '))
     sampling_fn = SampleLowTemp(alpha=alpha)
     top_m = int(input(
@@ -165,6 +173,34 @@ def ui_generate_adjusted(model: ModelInstance, model_path: Path) -> None:
     data = model.generate_adjusted(n_tokens=top_m, adjust_fn=sampling_fn, max_tokens=max_tokens)
 
 # Handle saving data
+    response_path = get_adjusted_path(model_path)
+    ui_save_data(str(response_path), data)
+
+
+def ui_generate_power_mcmc(model: ModelInstance, model_path: Path) -> None:
+    """Handle user interface for getting model response using power sampling with MCMC."""
+    print('\nGenerating output using power sampling.')
+
+# Get user input
+    alpha = float(input('Please input the value of alpha, as a float: '))
+    peek = int(input(
+        'Please input the max lookahead depth to generate branches over, '
+        'as an integer: '
+    ))
+    top_m = int(input(
+        'Please input the number of most probable token candidates (M) to consider at each step: '
+    ))
+    max_tokens = int(input('Please input the maximum number of response tokens: '))
+
+# Construct sampling function and generate with it.
+    sampling_fn = SamplePowerDist(
+        alpha=alpha,
+        lookahead_depth=peek,
+        branch_sampler=MetropolisSampler()
+    )
+    data = model.generate_adjusted(n_tokens=top_m, adjust_fn=sampling_fn, max_tokens=max_tokens)
+
+# Handle saving data.
     response_path = get_adjusted_path(model_path)
     ui_save_data(str(response_path), data)
 
@@ -180,7 +216,7 @@ def main() -> None:
         raise SystemExit(1)
 
     choice = ui_select_function()
-    use_logits: bool = choice in (PROBS, GENERATE_ADJUSTED)
+    use_logits: bool = choice in (PROBS, LOW_TEMP, POWER_SAMPLING)
     model = ModelInstance(str(model_path), context, logits_all=use_logits)
 
     match choice:
@@ -189,7 +225,9 @@ def main() -> None:
         case 2:
             ui_get_probs(model, model_path)
         case 3:
-            ui_generate_adjusted(model, model_path)
+            ui_generate_low_temp(model, model_path)
+        case 4:
+            ui_generate_power_mcmc(model, model_path)
         case _:
             raise UnexpectedFunctionError
 
