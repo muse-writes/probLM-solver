@@ -1,49 +1,131 @@
 """Tests for adjust_probs.py."""
 
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 
-from problm_solver.adjust_probs import AdjustFn, SampleLowTemp, adjust_identity
+from problm_solver.adjust_probs import (
+    AdjustFn,
+    BranchSampler,
+    GenerationContext,
+    MetropolisSampler,
+    SampleLowTemp,
+    SamplePowerDist,
+    adjust_identity,
+)
 
+
+# ---------------------------------------------------------------------------
+# Shared fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def basic_context() -> GenerationContext:
+    """Return a minimal GenerationContext for testing simple adjust functions."""
+    return GenerationContext(
+        token_probs={' hello': -0.5, ' world': -1.2},
+        prev_probs=[],
+        context_tokens=[1, 2, 3],
+        query_next=MagicMock(return_value={' a': -0.5, ' b': -1.0}),
+        tokenize_token=MagicMock(return_value=[99]),
+    )
+
+
+@pytest.fixture()
+def context_with_prev(basic_context: GenerationContext) -> GenerationContext:
+    """Return a new GenerationContext identical to basic_context but with non-empty prev_probs."""
+    from dataclasses import replace
+    return replace(basic_context, prev_probs=[0.9, 0.3])
+
+
+@pytest.fixture()
+def power_dist_context() -> GenerationContext:
+    """Return a GenerationContext suitable for SamplePowerDist tests.
+
+    Two candidate tokens, query_next always returns a two-token distribution,
+    tokenize_token always returns [99].
+    """
+    return GenerationContext(
+        token_probs={' hello': -0.5, ' world': -1.2},
+        prev_probs=[],
+        context_tokens=[1, 2, 3],
+        query_next=MagicMock(return_value={' a': -0.5, ' b': -1.0}),
+        tokenize_token=MagicMock(return_value=[99]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# TestGenerationContext
+# ---------------------------------------------------------------------------
+
+class TestGenerationContext:
+    """Tests for GenerationContext dataclass."""
+
+    def test_stores_token_probs(self, basic_context: GenerationContext) -> None:
+        """token_probs is stored correctly."""
+        assert basic_context.token_probs == {' hello': -0.5, ' world': -1.2}
+
+    def test_stores_prev_probs(self, basic_context: GenerationContext) -> None:
+        """prev_probs is stored correctly."""
+        assert basic_context.prev_probs == []
+
+    def test_stores_context_tokens(self, basic_context: GenerationContext) -> None:
+        """context_tokens is stored correctly."""
+        assert basic_context.context_tokens == [1, 2, 3]
+
+    def test_query_next_is_callable(self, basic_context: GenerationContext) -> None:
+        """query_next field is callable."""
+        assert callable(basic_context.query_next)
+
+    def test_tokenize_token_is_callable(self, basic_context: GenerationContext) -> None:
+        """tokenize_token field is callable."""
+        assert callable(basic_context.tokenize_token)
+
+
+# ---------------------------------------------------------------------------
+# TestAdjustIdentity
+# ---------------------------------------------------------------------------
 
 class TestAdjustIdentity:
     """Tests for adjust_identity."""
 
-    def test_returns_dict(self) -> None:
+    def test_returns_dict(self, basic_context: GenerationContext) -> None:
         """adjust_identity() returns a dict."""
-        result = adjust_identity({' hello': -0.5, ' world': -1.2}, [])
-        assert isinstance(result, dict)
+        assert isinstance(adjust_identity(basic_context), dict)
 
-    def test_returns_input_unchanged(self) -> None:
-        """adjust_identity() returns the token_probs dict unmodified."""
-        token_probs = {' hello': -0.5, ' world': -1.2}
-        result = adjust_identity(token_probs, [])
-        assert result == token_probs
+    def test_returns_token_probs_unchanged(self, basic_context: GenerationContext) -> None:
+        """adjust_identity() returns context.token_probs unmodified."""
+        assert adjust_identity(basic_context) == basic_context.token_probs
 
-    def test_ignores_prev_probs(self) -> None:
+    def test_ignores_prev_probs(
+        self,
+        basic_context: GenerationContext,
+        context_with_prev: GenerationContext,
+    ) -> None:
         """adjust_identity() produces the same result regardless of prev_probs."""
-        token_probs = {' a': -0.1, ' b': -0.5}
-        assert adjust_identity(token_probs, []) == adjust_identity(token_probs, [0.9, 0.3])
+        assert adjust_identity(basic_context) == adjust_identity(context_with_prev)
 
-    def test_satisfies_adjust_fn_signature(self) -> None:
+    def test_satisfies_adjust_fn_signature(self, basic_context: GenerationContext) -> None:
         """adjust_identity is a valid AdjustFn (callable with correct signature)."""
         assert callable(adjust_identity)
-        result = adjust_identity({' x': -1.0}, [0.5])
-        assert isinstance(result, dict)
+        assert isinstance(adjust_identity(basic_context), dict)
 
+
+# ---------------------------------------------------------------------------
+# TestSampleLowTempInit
+# ---------------------------------------------------------------------------
 
 class TestSampleLowTempInit:
     """Tests for SampleLowTemp.__init__."""
 
     def test_stores_alpha(self) -> None:
         """alpha is stored as an instance attribute."""
-        adj = SampleLowTemp(alpha=2)
-        assert adj.alpha == 2
+        assert SampleLowTemp(alpha=2).alpha == 2
 
     def test_different_alpha_values_stored(self) -> None:
         """Different alpha values are stored independently."""
-        adj1 = SampleLowTemp(alpha=1)
-        adj2 = SampleLowTemp(alpha=3)
+        adj1, adj2 = SampleLowTemp(alpha=1), SampleLowTemp(alpha=3)
         assert adj1.alpha == 1
         assert adj2.alpha == 3
 
@@ -51,12 +133,14 @@ class TestSampleLowTempInit:
         """SampleLowTemp instances are callable."""
         assert callable(SampleLowTemp(alpha=2))
 
-    def test_satisfies_adjust_fn_signature(self) -> None:
+    def test_satisfies_adjust_fn_signature(self, basic_context: GenerationContext) -> None:
         """SampleLowTemp instances satisfy the AdjustFn interface."""
-        adj = SampleLowTemp(alpha=2)
-        result = adj({' hello': -0.5}, [])
-        assert isinstance(result, dict)
+        assert isinstance(SampleLowTemp(alpha=2)(basic_context), dict)
 
+
+# ---------------------------------------------------------------------------
+# TestSampleLowTempCall
+# ---------------------------------------------------------------------------
 
 class TestSampleLowTempCall:
     """Tests for SampleLowTemp.__call__."""
@@ -66,66 +150,363 @@ class TestSampleLowTempCall:
         """Return a SampleLowTemp instance with alpha=2."""
         return SampleLowTemp(alpha=2)
 
-    def test_returns_dict(self, adj) -> None:
+    def test_returns_dict(self, adj: SampleLowTemp, basic_context: GenerationContext) -> None:
         """__call__() returns a dict."""
-        result = adj({' hello': -0.5, ' world': -1.2}, [])
-        assert isinstance(result, dict)
+        assert isinstance(adj(basic_context), dict)
 
-    def test_output_keys_match_input_keys(self, adj) -> None:
-        """The returned dict has the same keys as the input."""
-        token_probs = {' hello': -0.5, ' world': -1.2, ' foo': -2.0}
-        result = adj(token_probs, [])
-        assert set(result.keys()) == set(token_probs.keys())
+    def test_output_keys_match_input_keys(
+        self, adj: SampleLowTemp, basic_context: GenerationContext
+    ) -> None:
+        """The returned dict has the same keys as context.token_probs."""
+        assert set(adj(basic_context).keys()) == set(basic_context.token_probs.keys())
 
-    def test_output_values_are_floats(self, adj) -> None:
+    def test_output_values_are_floats(
+        self, adj: SampleLowTemp, basic_context: GenerationContext
+    ) -> None:
         """All values in the returned dict are floats."""
-        result = adj({' hello': -0.5, ' world': -1.2}, [])
-        assert all(isinstance(v, float) for v in result.values())
+        assert all(isinstance(v, float) for v in adj(basic_context).values())
 
-    def test_empty_prev_probs_gives_finite_output(self, adj) -> None:
+    def test_empty_prev_probs_gives_finite_output(
+        self, adj: SampleLowTemp, basic_context: GenerationContext
+    ) -> None:
         """With no previous tokens, output log-probs are finite for non-zero probs."""
-        result = adj({' a': -0.1, ' b': -0.5}, [])
-        assert all(np.isfinite(v) for v in result.values())
+        assert all(np.isfinite(v) for v in adj(basic_context).values())
 
-    def test_with_prev_probs_changes_output(self, adj) -> None:
-        """Providing non-empty prev_probs produces a different result than empty."""
-        token_probs = {' a': -0.1, ' b': -0.5}
-        result_no_prev = adj(token_probs, [])
-        result_with_prev = adj(token_probs, [0.8])
-        # The absolute values differ; relative order may be preserved
-        assert result_no_prev != result_with_prev
+    def test_with_prev_probs_changes_output(
+        self,
+        adj: SampleLowTemp,
+        basic_context: GenerationContext,
+        context_with_prev: GenerationContext,
+    ) -> None:
+        """Providing non-empty prev_probs produces a different result."""
+        assert adj(basic_context) != adj(context_with_prev)
 
-    def test_relative_order_preserved_with_empty_prev_probs(self, adj) -> None:
-        """With no previous tokens, the most likely token remains most likely after adjustment."""
-        token_probs = {' likely': -0.1, ' unlikely': -5.0}
-        result = adj(token_probs, [])
+    def test_relative_order_preserved_with_empty_prev_probs(
+        self, adj: SampleLowTemp
+    ) -> None:
+        """With no previous tokens, the most likely token remains most likely."""
+        ctx = GenerationContext(
+            token_probs={' likely': -0.1, ' unlikely': -5.0},
+            prev_probs=[],
+            context_tokens=[],
+            query_next=MagicMock(),
+            tokenize_token=MagicMock(),
+        )
+        result = adj(ctx)
         assert result[' likely'] > result[' unlikely']
 
     def test_alpha_one_preserves_relative_order(self) -> None:
         """With alpha=1 and no prev_probs, relative token ordering is unchanged."""
-        adj1 = SampleLowTemp(alpha=1)
-        token_probs = {' a': -0.2, ' b': -0.8, ' c': -2.0}
-        result = adj1(token_probs, [])
+        ctx = GenerationContext(
+            token_probs={' a': -0.2, ' b': -0.8, ' c': -2.0},
+            prev_probs=[],
+            context_tokens=[],
+            query_next=MagicMock(),
+            tokenize_token=MagicMock(),
+        )
+        result = SampleLowTemp(alpha=1)(ctx)
         assert result[' a'] > result[' b'] > result[' c']
 
     def test_different_alpha_produces_different_output(self) -> None:
         """Different alpha values produce different adjusted distributions."""
-        token_probs = {' a': -0.2, ' b': -1.0}
-        result_a1 = SampleLowTemp(alpha=1)(token_probs, [])
-        result_a3 = SampleLowTemp(alpha=3)(token_probs, [])
-        assert result_a1 != result_a3
+        ctx = GenerationContext(
+            token_probs={' a': -0.2, ' b': -1.0},
+            prev_probs=[],
+            context_tokens=[],
+            query_next=MagicMock(),
+            tokenize_token=MagicMock(),
+        )
+        assert SampleLowTemp(alpha=1)(ctx) != SampleLowTemp(alpha=3)(ctx)
 
+
+# ---------------------------------------------------------------------------
+# TestBranchSampler
+# ---------------------------------------------------------------------------
+
+class TestBranchSampler:
+    """Tests for the BranchSampler ABC."""
+
+    def test_reset_is_no_op_by_default(self) -> None:
+        """The default reset() implementation does not raise and returns None."""
+        class MinimalSampler(BranchSampler):
+            def step(self, proposed_log_prob: float, alpha: float = 1.0, **_) -> float:
+                return proposed_log_prob
+            def should_continue(self, branch_log_probs) -> bool:
+                return False
+
+        MinimalSampler().reset()  # must not raise
+
+    def test_subclass_must_implement_abstract_methods(self) -> None:
+        """BranchSampler cannot be instantiated without implementing abstract methods."""
+        with pytest.raises(TypeError):
+            BranchSampler()  # type: ignore[abstract]
+
+
+# ---------------------------------------------------------------------------
+# TestMetropolisSampler
+# ---------------------------------------------------------------------------
+
+class TestMetropolisSampler:
+    """Tests for MetropolisSampler."""
+
+    @pytest.fixture()
+    def sampler(self) -> MetropolisSampler:
+        """Return a fresh MetropolisSampler."""
+        return MetropolisSampler()
+
+    def test_is_branch_sampler(self, sampler: MetropolisSampler) -> None:
+        """MetropolisSampler is a BranchSampler subclass."""
+        assert isinstance(sampler, BranchSampler)
+
+    def test_first_step_always_initialises_chain(self, sampler: MetropolisSampler) -> None:
+        """First step always accepts and initialises _current_log_prob."""
+        accepted = sampler.step(-2.0, alpha=2.0)
+        assert accepted == -2.0
+        assert sampler._current_log_prob == -2.0
+
+    def test_reset_clears_state(self, sampler: MetropolisSampler) -> None:
+        """reset() clears chain state."""
+        sampler.step(-2.0, alpha=2.0)
+        sampler.reset()
+        assert sampler._current_log_prob is None
+
+    def test_step_returns_float(self, sampler: MetropolisSampler) -> None:
+        """step() returns a float accepted log-probability."""
+        assert isinstance(sampler.step(-1.5, alpha=2.0), float)
+
+    def test_more_likely_proposal_has_high_acceptance(self, sampler: MetropolisSampler) -> None:
+        """A much higher log-prob proposal is accepted with alpha > 1."""
+        sampler.step(-10.0, alpha=2.0)
+        accepted = sampler.step(-1.0, alpha=2.0)
+        assert accepted == -1.0
+
+    def test_alpha_one_always_accepts(self, sampler: MetropolisSampler) -> None:
+        """With alpha=1 acceptance ratio is 0, so every proposal is accepted."""
+        sampler.step(-5.0, alpha=1.0)
+        # (alpha-1)*(proposed-current) = 0 regardless of values, so always accept
+        for _ in range(20):
+            proposal = -10.0
+            accepted = sampler.step(proposal, alpha=1.0)
+            assert accepted == proposal
+
+    def test_should_continue_returns_true_below_min_branches(self) -> None:
+        """should_continue returns True when fewer than min_branches collected."""
+        sampler = MetropolisSampler(min_branches=5)
+        for n in range(1, 5):
+            lp = np.zeros(n)
+            assert sampler.should_continue(lp) is True
+
+    def test_should_continue_returns_false_at_max_branches(self) -> None:
+        """should_continue returns False when max_branches is reached."""
+        sampler = MetropolisSampler(min_branches=1, max_branches=10)
+        assert sampler.should_continue(np.zeros(10)) is False
+
+    def test_should_continue_returns_false_when_sem_below_tolerance(self) -> None:
+        """should_continue returns False when SEM of branch log-probs < tolerance."""
+        sampler = MetropolisSampler(min_branches=3, tolerance=0.1)
+        assert sampler.should_continue(np.array([1.0, 1.0, 1.0, 1.0, 1.0])) is False
+
+    def test_should_continue_returns_true_when_sem_above_tolerance(self) -> None:
+        """should_continue returns True when SEM of branch log-probs >= tolerance."""
+        sampler = MetropolisSampler(min_branches=3, tolerance=0.01)
+        assert sampler.should_continue(np.array([-10.0, 0.0, 10.0, -10.0, 10.0])) is True
+
+
+# ---------------------------------------------------------------------------
+# TestSamplePowerDistInit
+# ---------------------------------------------------------------------------
+
+class TestSamplePowerDistInit:
+    """Tests for SamplePowerDist.__init__."""
+
+    def test_stores_alpha(self) -> None:
+        """alpha is stored correctly."""
+        s = SamplePowerDist(alpha=2.0, lookahead_depth=4,
+                            branch_sampler=MetropolisSampler())
+        assert s.alpha == 2.0
+
+    def test_stores_lookahead_depth(self) -> None:
+        """lookahead_depth is stored correctly."""
+        s = SamplePowerDist(alpha=1.0, lookahead_depth=7,
+                            branch_sampler=MetropolisSampler())
+        assert s.lookahead_depth == 7
+
+    def test_stores_branch_sampler(self) -> None:
+        """branch_sampler is stored correctly."""
+        bs = MetropolisSampler()
+        s = SamplePowerDist(alpha=1.0, lookahead_depth=2, branch_sampler=bs)
+        assert s.branch_sampler is bs
+
+    def test_does_not_store_n_branches(self) -> None:
+        """SamplePowerDist has no n_branches attribute."""
+        s = SamplePowerDist(alpha=1.0, lookahead_depth=2,
+                            branch_sampler=MetropolisSampler())
+        assert not hasattr(s, 'n_branches')
+
+    def test_is_callable(self) -> None:
+        """SamplePowerDist instances are callable."""
+        assert callable(SamplePowerDist(alpha=1.0, lookahead_depth=1,
+                                        branch_sampler=MetropolisSampler()))
+
+
+# ---------------------------------------------------------------------------
+# TestSamplePowerDistCall
+# ---------------------------------------------------------------------------
+
+class TestSamplePowerDistCall:
+    """Tests for SamplePowerDist.__call__."""
+
+    @pytest.fixture()
+    def mock_sampler(self) -> MagicMock:
+        """Return a mock BranchSampler that accepts proposals and stops after one branch."""
+        s = MagicMock(spec=BranchSampler)
+        s.step.side_effect = lambda proposed_log_prob, **_: proposed_log_prob
+        s.should_continue.return_value = False  # stop after the first branch
+        return s
+
+    @pytest.fixture()
+    def spd(self, mock_sampler: MagicMock) -> SamplePowerDist:
+        """Return a SamplePowerDist(alpha=1, lookahead_depth=2) with mock sampler."""
+        return SamplePowerDist(
+            alpha=1.0, lookahead_depth=2, branch_sampler=mock_sampler
+        )
+
+    def test_returns_dict(
+        self, spd: SamplePowerDist, power_dist_context: GenerationContext
+    ) -> None:
+        """__call__() returns a dict."""
+        assert isinstance(spd(power_dist_context), dict)
+
+    def test_output_keys_match_input_keys(
+        self, spd: SamplePowerDist, power_dist_context: GenerationContext
+    ) -> None:
+        """The returned dict has the same keys as context.token_probs."""
+        result = spd(power_dist_context)
+        assert set(result.keys()) == set(power_dist_context.token_probs.keys())
+
+    def test_output_values_are_floats(
+        self, spd: SamplePowerDist, power_dist_context: GenerationContext
+    ) -> None:
+        """All values in the returned dict are floats."""
+        result = spd(power_dist_context)
+        assert all(isinstance(v, float) for v in result.values())
+
+    def test_query_next_called_for_each_branch_step(
+        self, spd: SamplePowerDist, power_dist_context: GenerationContext
+    ) -> None:
+        """query_next is called n_candidates * lookahead_depth times (one branch each)."""
+        spd(power_dist_context)
+        # 2 candidates * 1 branch * 2 depth = 4 calls
+        assert power_dist_context.query_next.call_count == 4
+
+    def test_branch_sampler_reset_called_per_branch(
+        self, spd: SamplePowerDist, mock_sampler: MagicMock,
+        power_dist_context: GenerationContext,
+    ) -> None:
+        """reset() is called once at the start of each branch."""
+        spd(power_dist_context)
+        # 2 candidates * 1 branch = 2 resets
+        assert mock_sampler.reset.call_count == 2
+
+    def test_branch_sampler_step_called_per_branch(
+        self, spd: SamplePowerDist, mock_sampler: MagicMock,
+        power_dist_context: GenerationContext,
+    ) -> None:
+        """step() is called once per completed branch proposal."""
+        spd(power_dist_context)
+        # 2 candidates * 1 branch = 2 MH steps
+        assert mock_sampler.step.call_count == 2
+
+    def test_should_continue_checked_after_each_branch(
+        self, spd: SamplePowerDist, mock_sampler: MagicMock,
+        power_dist_context: GenerationContext,
+    ) -> None:
+        """should_continue is called once after each completed branch."""
+        spd(power_dist_context)
+        # called once per candidate (one branch each, then stops)
+        assert mock_sampler.should_continue.call_count == 2
+
+    def test_continues_until_should_continue_false(
+        self, mock_sampler: MagicMock, power_dist_context: GenerationContext
+    ) -> None:
+        """Sampling runs multiple branches until should_continue returns False."""
+        # Return True for first 2 calls per candidate, then False
+        mock_sampler.should_continue.side_effect = [True, True, False, True, True, False]
+        spd = SamplePowerDist(alpha=1.0, lookahead_depth=1, branch_sampler=mock_sampler)
+        spd(power_dist_context)
+        # 2 candidates * 3 branches each = 6 should_continue calls
+        assert mock_sampler.should_continue.call_count == 6
+
+    def test_early_eos_stops_branch_without_penalty(
+        self, mock_sampler: MagicMock
+    ) -> None:
+        """When query_next returns None, the branch stops and sample() is not called."""
+        spd = SamplePowerDist(
+            alpha=1.0, lookahead_depth=5, branch_sampler=mock_sampler
+        )
+        ctx = GenerationContext(
+            token_probs={' hello': -0.5},
+            prev_probs=[],
+            context_tokens=[1, 2],
+            query_next=MagicMock(return_value=None),  # EOS immediately
+            tokenize_token=MagicMock(return_value=[99]),
+        )
+        result = spd(ctx)
+        mock_sampler.step.assert_called()
+        assert isinstance(result, dict)
+        assert ' hello' in result
+
+    def test_eos_mid_branch_uses_partial_log_prob(
+        self, mock_sampler: MagicMock
+    ) -> None:
+        """A branch that hits EOS mid-way uses its partial log-prob, not 0."""
+        query_next = MagicMock(side_effect=[
+            {' a': -0.5, ' b': -1.0},  # depth 0: valid
+            None,                        # depth 1: EOS
+        ])
+        spd = SamplePowerDist(
+            alpha=1.0, lookahead_depth=3, branch_sampler=mock_sampler
+        )
+        ctx = GenerationContext(
+            token_probs={' hello': -0.5},
+            prev_probs=[],
+            context_tokens=[1],
+            query_next=query_next,
+            tokenize_token=MagicMock(return_value=[99]),
+        )
+        result = spd(ctx)
+        # one MH step for one completed branch
+        assert mock_sampler.step.call_count == 1
+        assert np.isfinite(result[' hello'])
+
+
+# ---------------------------------------------------------------------------
+# TestAdjustFnTypeAlias
+# ---------------------------------------------------------------------------
 
 class TestAdjustFnTypeAlias:
     """Tests for the AdjustFn type alias."""
 
-    def test_adjust_identity_is_valid_adjust_fn(self) -> None:
+    def test_adjust_identity_is_valid_adjust_fn(
+        self, basic_context: GenerationContext
+    ) -> None:
         """adjust_identity satisfies the AdjustFn calling convention."""
         fn: AdjustFn = adjust_identity
-        assert fn({' a': -0.5}, []) == {' a': -0.5}
+        assert fn(basic_context) == basic_context.token_probs
 
-    def test_adjust_prob_power_instance_is_valid_adjust_fn(self) -> None:
+    def test_sample_low_temp_is_valid_adjust_fn(
+        self, basic_context: GenerationContext
+    ) -> None:
         """A SampleLowTemp instance satisfies the AdjustFn calling convention."""
         fn: AdjustFn = SampleLowTemp(alpha=2)
-        result = fn({' a': -0.5, ' b': -1.0}, [0.7])
-        assert isinstance(result, dict)
+        assert isinstance(fn(basic_context), dict)
+
+    def test_sample_power_dist_is_valid_adjust_fn(
+        self, basic_context: GenerationContext
+    ) -> None:
+        """A SamplePowerDist instance satisfies the AdjustFn calling convention."""
+        fn: AdjustFn = SamplePowerDist(
+            alpha=1.0, lookahead_depth=1,
+            branch_sampler=MetropolisSampler(),
+        )
+        assert isinstance(fn(basic_context), dict)

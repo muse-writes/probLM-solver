@@ -391,22 +391,22 @@ class TestGenerateAdjusted:
 
     def test_returns_llmoutputdata(self, gen_adj_model) -> None:
         """generate_adjusted() returns an LLMOutputData instance."""
-        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=3)
+        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
         assert isinstance(result, LLMOutputData)
 
     def test_prompt_matches_context(self, gen_adj_model) -> None:
         """The prompt on the returned LLMOutputData matches the model's context."""
-        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=3)
+        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
         assert result.prompt == gen_adj_model.context
 
     def test_written_flag_is_false(self, gen_adj_model) -> None:
         """Freshly generated data has written=False."""
-        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=3)
+        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
         assert result.written is False
 
     def test_loops_exactly_max_tokens_times(self, gen_adj_model) -> None:
         """query_log_probs_next_token is called exactly max_tokens times when EOS never appears."""
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=4)
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=4)
         assert gen_adj_model.query_log_probs_next_token.call_count == 4
 
     def test_adjust_fn_called_each_step(self, gen_adj_model) -> None:
@@ -416,49 +416,49 @@ class TestGenerateAdjusted:
         assert adjust_fn.call_count == 3
 
     def test_adjust_fn_receives_top_m_tokens(self, gen_adj_model) -> None:
-        """adjust_fn is called with the top_m_tokens from LLMNextTokenData each step."""
+        """adjust_fn receives a GenerationContext whose token_probs is the top_m_tokens dict."""
         adjust_fn = MagicMock(return_value={' hello': -0.5})
         gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=1)
-        args, _ = adjust_fn.call_args
-        assert args[0] == {' hello': -0.5, ' world': -1.2}
+        ctx = adjust_fn.call_args[0][0]
+        assert ctx.token_probs == {' hello': -0.5, ' world': -1.2}
 
     def test_adjust_fn_receives_empty_prev_probs_on_first_step(self, gen_adj_model) -> None:
-        """adjust_fn receives an empty prev_probs list on the very first step."""
+        """adjust_fn receives a GenerationContext with empty prev_probs on the first step."""
         adjust_fn = MagicMock(return_value={' hello': -0.5})
         gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=1)
-        args, _ = adjust_fn.call_args_list[0]
-        assert args[1] == []
+        ctx = adjust_fn.call_args_list[0][0][0]
+        assert ctx.prev_probs == []
 
     def test_adjust_fn_receives_growing_prev_probs(self, gen_adj_model) -> None:
         """prev_probs grows by one entry per step, containing prob_of_token return values."""
         adjust_fn = MagicMock(return_value={' hello': -0.5})
         gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=3)
         # Step 1: prev_probs = []; step 2: [0.8]; step 3: [0.8, 0.8]
-        assert adjust_fn.call_args_list[0][0][1] == []
-        assert adjust_fn.call_args_list[1][0][1] == [0.8]
-        assert adjust_fn.call_args_list[2][0][1] == [0.8, 0.8]
+        assert adjust_fn.call_args_list[0][0][0].prev_probs == []
+        assert adjust_fn.call_args_list[1][0][0].prev_probs == [0.8]
+        assert adjust_fn.call_args_list[2][0][0].prev_probs == [0.8, 0.8]
 
     def test_response_decoded_from_detokenize(self, gen_adj_model) -> None:
         """The response string in the result comes from decoding the generated token IDs."""
-        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=2)
+        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=2)
         assert result.data[0] == ' hello world'
 
     def test_stops_when_query_returns_none(self, gen_adj_model) -> None:
         """The loop breaks immediately when query_log_probs_next_token returns None."""
         gen_adj_model.query_log_probs_next_token.return_value = None
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=10)
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=10)
         assert gen_adj_model.query_log_probs_next_token.call_count == 1
 
     def test_stops_early_on_eos_token(self, gen_adj_model) -> None:
         """The loop breaks before max_tokens when tokenize returns the EOS token ID."""
         gen_adj_model._llm.tokenize.return_value = [0]
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=10)
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=10)
         assert gen_adj_model.query_log_probs_next_token.call_count == 1
 
     def test_stops_early_on_empty_token_ids(self, gen_adj_model) -> None:
         """The loop breaks when tokenize returns an empty list for the sampled token."""
         gen_adj_model._llm.tokenize.return_value = []
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda x, _: x, max_tokens=10)
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=10)
         assert gen_adj_model.query_log_probs_next_token.call_count == 1
 
     def test_prev_probs_reset_between_calls(self, gen_adj_model) -> None:
@@ -468,5 +468,4 @@ class TestGenerateAdjusted:
         gen_adj_model.query_log_probs_next_token.reset_mock()
         adjust_fn.reset_mock()
         gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=1)
-        args, _ = adjust_fn.call_args_list[0]
-        assert args[1] == []
+        assert adjust_fn.call_args_list[0][0][0].prev_probs == []

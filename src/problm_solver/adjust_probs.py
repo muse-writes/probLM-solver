@@ -1,33 +1,57 @@
 """Implement several adjustment functions for generate_adjusted."""
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
 
-# Callable that receives a top-M {token: log_prob} dict and the list of
-# normalised probabilities of all previously selected tokens in this
-# generation, and returns a modified log-prob dict. Values need not be
-# normalised; renormalisation is applied by sample_from_logprobs before
-# sampling.
-AdjustFn = Callable[[dict[str, float], list[float]], dict[str, float]]
+from problm_solver.analysis.probabilities import prob_of_token, sample_from_logprobs
 
 
-def adjust_identity(
-    token_probs: dict[str, float],
-    prev_probs: list[float],  # noqa: ARG001
-) -> dict[str, float]:
+@dataclass
+class GenerationContext:
+    """All information available to an :data:`AdjustFn` at each generation step.
+
+    Injected by ``generate_adjusted()`` so that adjustment functions can
+    access model-querying capabilities without a direct dependency on
+    ``ModelInstance``. All mutable fields are defensive copies.
+
+    :param token_probs: Current top-M mapping of token string to log-probability.
+    :param prev_probs: Normalised probabilities of all previously selected
+        tokens in this generation. Empty on the first step.
+    :param context_tokens: The current token ID sequence (prompt + generated
+        tokens so far).
+    :param query_next: Queries the model for the top-M next-token log-prob
+        dict given a context token ID list. Pre-bound to the current
+        ``n_tokens``. Returns ``None`` on EOS.
+    :param tokenize_token: Converts a single token string to its token ID(s).
+    """
+
+    token_probs: dict[str, float]
+    prev_probs: list[float]
+    context_tokens: list[int]
+    query_next: Callable[[list[int]], dict[str, float] | None]
+    tokenize_token: Callable[[str], list[int]]
+
+
+# Callable that receives a GenerationContext and returns a modified log-prob
+# dict. Values need not be normalised; renormalisation is applied by
+# sample_from_logprobs before sampling.
+AdjustFn = Callable[[GenerationContext], dict[str, float]]
+
+
+def adjust_identity(context: GenerationContext) -> dict[str, float]:
     """Return token log-probabilities unchanged.
 
     Satisfies the :data:`AdjustFn` interface without modifying the
     distribution. Useful as a baseline and for testing.
 
-    :param token_probs: Top-M mapping of token string to log-probability.
-    :param prev_probs: Unused; included to satisfy the :data:`AdjustFn`
-        interface.
-    :returns: ``token_probs`` unmodified.
+    :param context: The current generation context.
+    :returns: ``context.token_probs`` unmodified.
     """
-    return token_probs
+    return context.token_probs
 
 
 class SampleLowTemp:
@@ -45,7 +69,7 @@ class SampleLowTemp:
     Example usage::
 
         adjust_fn = SampleLowTemp(alpha=2)
-        result = adjust_fn(token_probs, prev_probs)
+        result = adjust_fn(context)
     """
 
     def __init__(self, alpha: float) -> None:
@@ -56,25 +80,260 @@ class SampleLowTemp:
         """
         self.alpha = alpha
 
-    def __call__(
-        self,
-        token_probs: dict[str, float],
-        prev_probs: list[float],
-    ) -> dict[str, float]:
+    def __call__(self, context: GenerationContext) -> dict[str, float]:
         """Apply power-scaling adjustment to the current token distribution.
 
-        :param token_probs: Top-M mapping of token string to log-probability
-            at the current generation step.
-        :param prev_probs: Normalised probabilities of all previously selected
-            tokens in this generation. Empty on the first step.
+        :param context: The current generation context. Uses
+            ``context.token_probs`` and ``context.prev_probs``.
         :returns: Adjusted log-probability mapping. Note that tokens with very
             low probability may produce ``-inf`` log-probabilities after
             scaling.
         """
-        tokens = list(token_probs.keys())
-        lp = np.array([token_probs[t] for t in tokens], dtype=float)
+        tokens = list(context.token_probs.keys())
+        lp = np.array([context.token_probs[t] for t in tokens], dtype=float)
         lp -= lp.max()
         p: npt.NDArray = np.exp(lp)
-        prev_alpha = float(np.prod(np.array(prev_probs, dtype=float) ** self.alpha))
+        prev_alpha = float(
+            np.prod(np.array(context.prev_probs, dtype=float) ** self.alpha)
+        )
         new_logprobs: npt.NDArray = np.log(p ** self.alpha * prev_alpha)
         return dict(zip(tokens, list(new_logprobs), strict=True))
+
+
+class BranchSampler(ABC):
+    """Abstract base class for branch-level sampling strategies.
+
+    A ``BranchSampler`` runs a Markov chain over complete branch proposals.
+    :meth:`step` receives a proposed branch log-probability and returns the
+    chain state after accept/reject. :meth:`should_continue` decides whether
+    to keep proposing additional branches.
+    """
+
+    def reset(self) -> None:
+        """Reset internal state at the start of each candidate-token chain.
+
+        No-op for stateless samplers. Stateful samplers (e.g.
+        :class:`MetropolisSampler`) should override this.
+        """
+
+    @abstractmethod
+    def step(
+        self,
+        proposed_log_prob: float,
+        alpha: float = 1.0,
+        forward_log_q: float = 0.0,
+        reverse_log_q: float = 0.0,
+    ) -> float:
+        """Process one proposed branch and return the accepted chain state.
+
+        :param proposed_log_prob: Log-probability of the proposed branch under
+            the base model.
+        :param alpha: Power-distribution exponent. The acceptance ratio targets
+            ``π(x) ∝ p(x)^α``, so the ratio is computed as
+            ``(α-1) * (log p(x') - log p(x)) + log q(x|x') - log q(x'|x)``.
+        :param forward_log_q: Log proposal probability ``log q(x'|x)``.
+        :param reverse_log_q: Log reverse proposal probability ``log q(x|x')``.
+        :returns: The current chain state's branch log-probability after
+            accept/reject.
+        """
+
+    @abstractmethod
+    def should_continue(self, branch_log_probs: npt.NDArray[np.float64]) -> bool:
+        """Return ``True`` if more branch proposals should be sampled.
+
+        Called after each completed MCMC step with all accepted branch
+        log-probabilities so far.
+
+        :param branch_log_probs: 1-D array of accepted branch log-probabilities
+            from all completed steps.
+        :returns: ``True`` to sample another proposal, ``False`` to stop.
+        """
+
+
+class MetropolisSampler(BranchSampler):
+    """Metropolis-Hastings sampler over complete branch proposals.
+
+    Given a sequence of proposed branch log-probabilities, maintains an MCMC
+    chain and accepts a proposal with probability
+
+    ``min(1, exp(log p(x') - log p(x) + log q(x|x') - log q(x'|x)))``.
+
+    Convergence across accepted branch samples is assessed via the standard
+    error of the mean (SEM): ``SEM = std(branch_log_probs) / sqrt(n)``.
+    Sampling continues until ``SEM < tolerance``, after at least
+    ``min_branches`` samples, and always stops at ``max_branches``.
+
+    :param min_branches: Minimum accepted samples before checking SEM.
+    :param max_branches: Hard upper limit on accepted samples.
+    :param tolerance: SEM threshold below which sampling is considered
+        converged.
+    """
+
+    def __init__(
+        self,
+        min_branches: int = 5,
+        max_branches: int = 50,
+        tolerance: float = 1e-2,
+    ) -> None:
+        """Initialise with convergence parameters."""
+        self._current_log_prob: float | None = None
+        self._min_branches = min_branches
+        self._max_branches = max_branches
+        self._tolerance = tolerance
+
+    def reset(self) -> None:
+        """Clear chain state before starting a new candidate-token chain."""
+        self._current_log_prob = None
+
+    def step(
+        self,
+        proposed_log_prob: float,
+        alpha: float = 1.0,
+        forward_log_q: float = 0.0,
+        reverse_log_q: float = 0.0,
+    ) -> float:
+        """Apply one Metropolis-Hastings accept/reject step targeting ``p^α``.
+
+        The log acceptance ratio is
+        ``(α-1) * (log p(x') - log p(x)) + log q(x|x') - log q(x'|x)``.
+        When the proposal ``q`` is the base model ``p`` the proposal terms
+        cancel (``forward_log_q = proposed_log_prob``,
+        ``reverse_log_q = current_log_prob``), reducing to
+        ``(α-1) * (proposed - current)``.
+
+        :param proposed_log_prob: Proposed branch log-probability under ``p``.
+        :param alpha: Power-distribution exponent.
+        :param forward_log_q: ``log q(x'|x)`` for the proposal.
+        :param reverse_log_q: ``log q(x|x')`` for the reverse proposal.
+        :returns: Accepted chain state's log-probability.
+        """
+        if self._current_log_prob is None:
+            self._current_log_prob = proposed_log_prob
+            return self._current_log_prob
+
+        log_accept_ratio = (
+            (alpha - 1) * (proposed_log_prob - self._current_log_prob)
+            + reverse_log_q
+            - forward_log_q
+        )
+        if np.log(np.random.random()) < min(0.0, log_accept_ratio):
+            self._current_log_prob = proposed_log_prob
+
+        return self._current_log_prob
+
+    def should_continue(self, branch_log_probs: npt.NDArray[np.float64]) -> bool:
+        """Return ``True`` if more proposals should be sampled.
+
+        Uses SEM-based convergence after ``min_branches`` and before
+        ``max_branches``.
+        """
+        n = len(branch_log_probs)
+        if n < self._min_branches:
+            return True
+        if n >= self._max_branches:
+            return False
+        sem = float(np.std(branch_log_probs) / np.sqrt(n))
+        return sem >= self._tolerance
+
+
+class SamplePowerDist:
+    """Adjust token log-probabilities using future-branch power-distribution sampling.
+
+    For each candidate next token, repeatedly proposes complete future
+    branches of length ``lookahead_depth`` and updates a Markov chain using the
+    injected :class:`BranchSampler` (e.g. Metropolis-Hastings), continuing
+    until :meth:`~BranchSampler.should_continue` signals convergence. The
+    accepted branch log-probabilities are kept as a ``numpy`` array and
+    combined with the current token's log-probability via log-sum-exp to
+    produce the adjusted distribution.
+
+    Branches that reach EOS before ``lookahead_depth`` are terminated early
+    with no penalty — their partial log-probability is used as-is.
+
+    :param alpha: Scaling exponent applied to the current token log-probability.
+    :param lookahead_depth: Maximum number of steps to sample in each branch.
+    :param branch_sampler: Strategy used to sample tokens within each branch
+        and to determine when enough branches have been collected.
+        Must be a :class:`BranchSampler` instance; its
+        :meth:`~BranchSampler.reset` method is called at the start of every
+        branch.
+
+    Example usage::
+
+        sampler = SamplePowerDist(
+            alpha=1.0,
+            lookahead_depth=3,
+            branch_sampler=MetropolisSampler(),
+        )
+        result = sampler(context)
+    """
+
+    def __init__(
+        self,
+        alpha: float,
+        lookahead_depth: int,
+        branch_sampler: BranchSampler,
+    ) -> None:
+        """Initialise with lookahead parameters and a branch sampler.
+
+        :param alpha: Scaling exponent for the current token log-probability.
+        :param lookahead_depth: Maximum depth of each branch.
+        :param branch_sampler: The :class:`BranchSampler` to use within
+            branches and for convergence decisions.
+        """
+        self.alpha = alpha
+        self.lookahead_depth = lookahead_depth
+        self.branch_sampler = branch_sampler
+
+    def __call__(self, context: GenerationContext) -> dict[str, float]:
+        """Apply power-distribution adjustment using lookahead branch sampling.
+
+        :param context: The current generation context. Uses all fields:
+            ``token_probs``, ``context_tokens``, ``query_next``, and
+            ``tokenize_token``.
+        :returns: Adjusted log-probability mapping combining the current
+            token distribution with estimated future log-probabilities.
+        """
+        result: dict[str, float] = {}
+
+        for token, log_prob in context.token_probs.items():
+            token_ids = context.tokenize_token(token)
+            branch_log_probs_list: list[float] = []
+            self.branch_sampler.reset()
+
+            while True:
+                branch_ctx = list(context.context_tokens) + token_ids
+                proposed_branch_log_prob = 0.0
+
+                for _ in range(self.lookahead_depth):
+                    next_lp = context.query_next(branch_ctx)
+                    if next_lp is None:
+                        break  # EOS — keep partial log_prob, no penalty
+                    next_token = sample_from_logprobs(next_lp)
+                    proposed_branch_log_prob += float(
+                        np.log(prob_of_token(next_token, next_lp))
+                    )
+                    branch_ctx = branch_ctx + context.tokenize_token(next_token)
+
+                accepted_log_prob = self.branch_sampler.step(
+                    proposed_log_prob=proposed_branch_log_prob,
+                    alpha=self.alpha,
+                )
+                branch_log_probs_list.append(accepted_log_prob)
+
+                if not self.branch_sampler.should_continue(
+                    np.array(branch_log_probs_list, dtype=np.float64)
+                ):
+                    break
+
+            branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
+
+# Combine via log-sum-exp over alpha-scaled branch log-probs (eq. 7).
+            scaled = self.alpha * branch_log_probs
+            max_lp = scaled.max()
+            future_lp = float(
+                np.log(np.sum(np.exp(scaled - max_lp))) + max_lp
+            )
+            result[token] = self.alpha * log_prob + future_lp
+
+        return result

@@ -8,7 +8,7 @@ import numpy.typing as npt
 from llama_cpp import Llama
 from llama_cpp.llama_chat_format import Jinja2ChatFormatter
 
-from problm_solver.adjust_probs import AdjustFn
+from problm_solver.adjust_probs import AdjustFn, GenerationContext
 from problm_solver.analysis.probabilities import prob_of_token, sample_from_logprobs
 from problm_solver.analysis.tokenizer import LlamaTokenizer, TokenSequence
 from problm_solver.data import LLMNextTokenData, LLMOutputData, LLMTokenData
@@ -140,8 +140,8 @@ class ModelInstance:
 
         :param n_tokens: Number of top candidate tokens to retrieve at each
             step (M).
-        :param adjust_fn: Callable that receives a ``dict[str, float]`` mapping
-            token strings to log-probabilities and returns a modified mapping.
+        :param adjust_fn: Callable that receives a ``GenerationContext`` and
+            returns a modified ``dict[str, float]`` of token log-probabilities.
             Values do not need to be normalised.
         :param max_tokens: Maximum number of tokens to generate.
         :returns: ``LLMOutputData`` containing the prompt and the generated
@@ -156,7 +156,20 @@ class ModelInstance:
             next_token_data = self.query_log_probs_next_token(context, n_tokens)
             if next_token_data is None:
                 break
-            adjusted = adjust_fn(next_token_data.top_m_tokens, list(prev_probs))
+            ctx = GenerationContext(
+                token_probs=next_token_data.top_m_tokens,
+                prev_probs=list(prev_probs),
+                context_tokens=list(context),
+                query_next=lambda ctx_ids: (
+                    r.top_m_tokens
+                    if (r := self.query_log_probs_next_token(ctx_ids, n_tokens)) is not None
+                    else None
+                ),
+                tokenize_token=lambda s: self._llm.tokenize(
+                    s.encode('utf-8'), add_bos=False, special=False,
+                ),
+            )
+            adjusted = adjust_fn(ctx)
             token_str = sample_from_logprobs(adjusted)
             token_ids = self._llm.tokenize(
                 token_str.encode('utf-8'), add_bos=False, special=False,
