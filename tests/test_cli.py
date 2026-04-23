@@ -224,7 +224,7 @@ class TestUiSelectFunction:
         """ui_select_function() keeps prompting until a valid choice is entered."""
         from problm_solver import cli
 
-        responses = iter(['0', '3', 'abc', '2'])
+        responses = iter(['0', '-1', 'abc', '2'])
         monkeypatch.setattr('builtins.input', lambda _: next(responses))
         assert cli.ui_select_function() == 2
 

@@ -266,17 +266,15 @@ class TestQueryLogProbsNextToken:
         _, kwargs = next_token_model._llm.create_completion.call_args
         assert kwargs.get('max_tokens') == 1
 
-    def test_passes_logprobs_true(self, next_token_model) -> None:
-        """create_completion is called with logprobs=True."""
-        next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=2)
-        _, kwargs = next_token_model._llm.create_completion.call_args
-        assert kwargs.get('logprobs') is True
+    def test_passes_logprobs_as_n_tokens(self, next_token_model) -> None:
+        """create_completion is called with logprobs set to n_tokens.
 
-    def test_passes_top_logprobs_n_tokens(self, next_token_model) -> None:
-        """create_completion is called with top_logprobs equal to the requested n_tokens."""
+        create_completion takes logprobs as Optional[int] (the number of top
+        log-probabilities to return), not a boolean as in create_chat_completion.
+        """
         next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=5)
         _, kwargs = next_token_model._llm.create_completion.call_args
-        assert kwargs.get('top_logprobs') == 5
+        assert kwargs.get('logprobs') == 5
 
     def test_passes_context_as_prompt(self, next_token_model) -> None:
         """create_completion receives the context list as its positional prompt argument."""

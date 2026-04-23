@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from os.path import splitext
 from pathlib import Path
 
-from problm_solver.adjust_probs import AdjustProbPower
+from problm_solver.adjust_probs import SampleLowTemp
 from problm_solver.data import LLMOutputData, LLMTokenData
 from problm_solver.llama_interface import ModelInstance
 
@@ -156,13 +156,13 @@ def ui_select_function() -> int:
 
 def ui_generate_adjusted(model: ModelInstance, model_path: Path) -> None:
     """Handle user interface for getting model response using adjusted probability function."""
-    alpha = int(input('Please input the value of alpha, as an integer: '))
-    power_adjust_fn = AdjustProbPower(alpha=alpha)
+    alpha = float(input('Please input the value of alpha, as a float: '))
+    sampling_fn = SampleLowTemp(alpha=alpha)
     top_m = int(input(
         'Please input the number of most probable token candidates (M) to consider at each step: '
     ))
     max_tokens = int(input('Please input the maximum number of response tokens: '))
-    data = model.generate_adjusted(n_tokens=top_m, adjust_fn=power_adjust_fn, max_tokens=max_tokens)
+    data = model.generate_adjusted(n_tokens=top_m, adjust_fn=sampling_fn, max_tokens=max_tokens)
 
 # Handle saving data
     response_path = get_adjusted_path(model_path)

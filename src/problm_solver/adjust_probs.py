@@ -30,7 +30,7 @@ def adjust_identity(
     return token_probs
 
 
-class AdjustProbPower:
+class SampleLowTemp:
     """Adjust token log-probabilities by power-scaling with selection history.
 
     At each generation step, the current token probabilities are raised to
@@ -44,11 +44,11 @@ class AdjustProbPower:
 
     Example usage::
 
-        adjust_fn = AdjustProbPower(alpha=2)
+        adjust_fn = SampleLowTemp(alpha=2)
         result = adjust_fn(token_probs, prev_probs)
     """
 
-    def __init__(self, alpha: int) -> None:
+    def __init__(self, alpha: float) -> None:
         """Initialise with scaling exponent.
 
         :param alpha: Exponent applied to current and previous token
@@ -75,6 +75,6 @@ class AdjustProbPower:
         lp = np.array([token_probs[t] for t in tokens], dtype=float)
         lp -= lp.max()
         p: npt.NDArray = np.exp(lp)
-        prev_alpha: float = np.prod(np.array(prev_probs, dtype=float) ** self.alpha)
+        prev_alpha = float(np.prod(np.array(prev_probs, dtype=float) ** self.alpha))
         new_logprobs: npt.NDArray = np.log(p ** self.alpha * prev_alpha)
         return dict(zip(tokens, list(new_logprobs), strict=True))

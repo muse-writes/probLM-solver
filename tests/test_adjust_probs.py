@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from problm_solver.adjust_probs import AdjustFn, AdjustProbPower, adjust_identity
+from problm_solver.adjust_probs import AdjustFn, SampleLowTemp, adjust_identity
 
 
 class TestAdjustIdentity:
@@ -32,39 +32,39 @@ class TestAdjustIdentity:
         assert isinstance(result, dict)
 
 
-class TestAdjustProbPowerInit:
-    """Tests for AdjustProbPower.__init__."""
+class TestSampleLowTempInit:
+    """Tests for SampleLowTemp.__init__."""
 
     def test_stores_alpha(self) -> None:
         """alpha is stored as an instance attribute."""
-        adj = AdjustProbPower(alpha=2)
+        adj = SampleLowTemp(alpha=2)
         assert adj.alpha == 2
 
     def test_different_alpha_values_stored(self) -> None:
         """Different alpha values are stored independently."""
-        adj1 = AdjustProbPower(alpha=1)
-        adj2 = AdjustProbPower(alpha=3)
+        adj1 = SampleLowTemp(alpha=1)
+        adj2 = SampleLowTemp(alpha=3)
         assert adj1.alpha == 1
         assert adj2.alpha == 3
 
     def test_is_callable(self) -> None:
-        """AdjustProbPower instances are callable."""
-        assert callable(AdjustProbPower(alpha=2))
+        """SampleLowTemp instances are callable."""
+        assert callable(SampleLowTemp(alpha=2))
 
     def test_satisfies_adjust_fn_signature(self) -> None:
-        """AdjustProbPower instances satisfy the AdjustFn interface."""
-        adj = AdjustProbPower(alpha=2)
+        """SampleLowTemp instances satisfy the AdjustFn interface."""
+        adj = SampleLowTemp(alpha=2)
         result = adj({' hello': -0.5}, [])
         assert isinstance(result, dict)
 
 
-class TestAdjustProbPowerCall:
-    """Tests for AdjustProbPower.__call__."""
+class TestSampleLowTempCall:
+    """Tests for SampleLowTemp.__call__."""
 
     @pytest.fixture()
-    def adj(self) -> AdjustProbPower:
-        """Return an AdjustProbPower instance with alpha=2."""
-        return AdjustProbPower(alpha=2)
+    def adj(self) -> SampleLowTemp:
+        """Return a SampleLowTemp instance with alpha=2."""
+        return SampleLowTemp(alpha=2)
 
     def test_returns_dict(self, adj) -> None:
         """__call__() returns a dict."""
@@ -103,7 +103,7 @@ class TestAdjustProbPowerCall:
 
     def test_alpha_one_preserves_relative_order(self) -> None:
         """With alpha=1 and no prev_probs, relative token ordering is unchanged."""
-        adj1 = AdjustProbPower(alpha=1)
+        adj1 = SampleLowTemp(alpha=1)
         token_probs = {' a': -0.2, ' b': -0.8, ' c': -2.0}
         result = adj1(token_probs, [])
         assert result[' a'] > result[' b'] > result[' c']
@@ -111,8 +111,8 @@ class TestAdjustProbPowerCall:
     def test_different_alpha_produces_different_output(self) -> None:
         """Different alpha values produce different adjusted distributions."""
         token_probs = {' a': -0.2, ' b': -1.0}
-        result_a1 = AdjustProbPower(alpha=1)(token_probs, [])
-        result_a3 = AdjustProbPower(alpha=3)(token_probs, [])
+        result_a1 = SampleLowTemp(alpha=1)(token_probs, [])
+        result_a3 = SampleLowTemp(alpha=3)(token_probs, [])
         assert result_a1 != result_a3
 
 
@@ -125,7 +125,7 @@ class TestAdjustFnTypeAlias:
         assert fn({' a': -0.5}, []) == {' a': -0.5}
 
     def test_adjust_prob_power_instance_is_valid_adjust_fn(self) -> None:
-        """An AdjustProbPower instance satisfies the AdjustFn calling convention."""
-        fn: AdjustFn = AdjustProbPower(alpha=2)
+        """A SampleLowTemp instance satisfies the AdjustFn calling convention."""
+        fn: AdjustFn = SampleLowTemp(alpha=2)
         result = fn({' a': -0.5, ' b': -1.0}, [0.7])
         assert isinstance(result, dict)

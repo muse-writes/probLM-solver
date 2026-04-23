@@ -156,7 +156,7 @@ class ModelInstance:
             next_token_data = self.query_log_probs_next_token(context, n_tokens)
             if next_token_data is None:
                 break
-            adjusted = adjust_fn(next_token_data.top_m_tokens, prev_probs)
+            adjusted = adjust_fn(next_token_data.top_m_tokens, list(prev_probs))
             token_str = sample_from_logprobs(adjusted)
             token_ids = self._llm.tokenize(
                 token_str.encode('utf-8'), add_bos=False, special=False,

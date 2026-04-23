@@ -47,23 +47,3 @@ def sample_from_logprobs(log_probs: dict[str, float]) -> str:
     probs /= probs.sum()
     idx: int = int(np.random.choice(len(tokens), p=probs))
     return tokens[idx]
-
-
-class Probabilities:
-    """Probabilities associated with a dataset."""
-
-    def __init__(self, data: LLMOutputData, entry: str) -> None:
-        """Initialize."""
-        self.data: npt.NDArray[Any] = data.data
-        self.probs = None
-
-# The response for which probabilities are calculated.
-        self.entry_tokens: List[str] = entry.split()
-
-
-    def evaluate(self) -> None:
-        """Calculate probabilities."""
-        probabilities = np.empty(len(self.entry_tokens), dtype=np.float64)
-        for ii in range(len(self.entry_tokens)):
-            for data_entry in data:
-                pass
