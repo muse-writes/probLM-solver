@@ -23,7 +23,7 @@ class LLMOutputData:
     def write(self, fname: str) -> None:
         """Save data to a file in JSONL format.
 
-        Default filename is `[model]_[timestamp].jsonl`.
+        :param fname: File name to write to, absolute path.
         """
         with open(fname, 'w', encoding='utf-8') as writer:
             for i, response in enumerate(self.data, start=1):
@@ -37,7 +37,10 @@ class LLMOutputData:
 
 
     def read(self, fname: str) -> None:
-        """Read data to this object from a JSONL file."""
+        """Read data to this object from a JSONL file.
+
+        :param fname: File name to read from, absolute path.
+        """
         responses = []
         with open(fname, encoding='utf-8') as reader:
             for line in reader:
@@ -52,7 +55,13 @@ class TokenProbError(ValueError):
     """Raise an error when number of tokens in data isn't equal to probs."""
 
     def __init__(self, data_class: type) -> None:
-        """Initialize error message."""
+        """Initialize error message.
+
+        Error is intended for dataclasses and other containers that hold tokens and their
+        probabilities.
+
+        :param data_class: Class type to be passed to error message.
+        """
         super().__init__(
             f'Number of probabilities in `{data_class}` does not match the '
             f'number of tokens.'
@@ -81,7 +90,7 @@ class LLMTokenData:
     def write(self, fname: str) -> None:
         """Save data to a file in JSON format.
 
-        Default filename is `prob_[model]_[timestamp].json`.
+        :param fname: File name to write to, absolute path.
         """
         with open(fname, 'w', encoding='utf-8') as writer:
             record = {
@@ -94,7 +103,10 @@ class LLMTokenData:
 
 
     def read(self, fname: str) -> None:
-        """Read data from JSON file."""
+        """Read data from JSON file.
+
+        :param fname: File name to read from, absolute path.
+        """
         with open(fname, encoding='utf-8') as reader:
             data = json.load(reader)
             self.prompt = data['prompt']
@@ -126,7 +138,10 @@ class LLMNextTokenData:
 
 
     def write(self, fname: str) -> None:
-        """Save data to a file in JSON format."""
+        """Save data to a file in JSON format.
+
+        :param fname: File name to write to, absolute path.
+        """
         with open(fname, 'w', encoding='utf-8') as writer:
             record = {
                 'prompt': self.prompt,
@@ -138,7 +153,10 @@ class LLMNextTokenData:
 
 
     def read(self, fname: str) -> None:
-        """Read from JSON file."""
+        """Read from JSON file.
+
+        :param fname: File name to read from, absolute path.
+        """
         with open(fname, encoding='utf-8') as reader:
             data = json.load(reader)
             self.prompt = data['prompt']

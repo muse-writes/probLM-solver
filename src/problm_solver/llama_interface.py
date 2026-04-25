@@ -15,21 +15,33 @@ from problm_solver.data import LLMNextTokenData, LLMOutputData, LLMTokenData
 
 
 class ModelInstance:
-    """Model class."""
+    """Keeps a model instance and its context, with methods for querying the Llama instance."""
 
     def __init__(self, fname: str, context: str, logits_all: bool = False) -> None:
-        """Init method."""
+        """Initialize Llama instance and store context.
+
+        :param fname: absolute path of the model .gguf file.
+        :param context: query that the model is initialised with.
+        :param logits_all: whether or not probability logging is necessary in the Llama instance.
+        """
         self._llm = Llama(model_path=fname, n_ctx=2048, logits_all=logits_all)
         self.context = context
 
 
     def query_n_times(self, n: int) -> npt.NDArray[Any]:
-        """Query the LLM with the same context N times, return the output."""
+        """Query the LLM with the same context N times, return the output.
+
+        :param n: number of times N to query the Llama instance.
+        :returns: an array of response strings.
+        """
         return np.array([self.query() for _ in range(n)], dtype=str)
 
 
     def query(self) -> str:
-        """Query the LLM once."""
+        """Query the LLM once.
+
+        :returns: the response string.
+        """
         output = self._llm.create_chat_completion(
             messages=[{'role': 'user', 'content': self.context}],
             max_tokens=512,
@@ -38,7 +50,11 @@ class ModelInstance:
 
 
     def generate_data(self, n_samples: int) -> LLMOutputData:
-        """Generate data by querying the LLM `n_samples` times."""
+        """Generate data by querying the LLM `n_samples` times.
+
+        :param n_samples: the number of times to query the Llama instance.
+        :returns: A data container with all responses and the prompt.
+        """
         data = self.query_n_times(n_samples)
         return LLMOutputData(prompt=self.context, data=data)
 
@@ -50,6 +66,9 @@ class ModelInstance:
         the model's own BPE tokenization of the response alongside the
         log-probability of each token at its position. Log-probabilities are
         converted to probabilities via ``exp``.
+
+        :returns: A data container holding the prompt, alongside the tokens and their
+            probabilities.
         """
         output = self._llm.create_chat_completion(
             messages=[{'role': 'user', 'content': self.context}],
@@ -96,7 +115,10 @@ class ModelInstance:
 
 
     def get_tokenizer(self) -> LlamaTokenizer:
-        """Return a LlamaTokenizer backed by this model's vocabulary."""
+        """Exposes a LlamaTokenizer backed by this model's vocabulary.
+
+        :returns: The tokenizer instance, defined in ``problm_solver.analysis.tokenizer``.
+        """
         return LlamaTokenizer(self._llm)
 
 
@@ -108,6 +130,8 @@ class ModelInstance:
         user-role message, and tokenises the resulting prompt string to a list
         of integer token IDs. This list is the initial context passed to
         ``generate_adjusted()``.
+
+        :returns: A tokenized prompt.
         """
         chat_template = self._llm.metadata['tokenizer.chat_template']
         eos_token = self._llm.detokenize([self._llm.token_eos()]).decode('utf-8', errors='ignore')

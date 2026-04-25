@@ -229,13 +229,19 @@ class MetropolisSampler(BranchSampler):
 
         Uses SEM-based convergence after ``min_branches`` and before
         ``max_branches``.
+
+        :param: branch logarithmic probabilities to date.
         """
         n = len(branch_log_probs)
         if n < self._min_branches:
             return True
         if n >= self._max_branches:
             return False
-        sem = float(np.std(branch_log_probs) / np.sqrt(n))
+# TODO(Clio): Write proper equilibration algorithm?? Allow input control?
+# Discard equilibration probabilities in SEM calculation.
+# set to > min_branches a.t.m.
+# Noise in probabilities is likely to be quite high, think more about this.
+        sem = float(np.std(branch_log_probs[self._min_branches:]) / np.sqrt(n))
         return sem >= self._tolerance
 
 
@@ -264,7 +270,7 @@ class SamplePowerDist:
     Example usage::
 
         sampler = SamplePowerDist(
-            alpha=1.0,
+            alpha=2.0,
             lookahead_depth=3,
             branch_sampler=MetropolisSampler(),
         )
@@ -308,6 +314,9 @@ class SamplePowerDist:
                 branch_ctx = list(context.context_tokens) + token_ids
                 proposed_branch_log_prob = 0.0
 
+# TODO(Clio): Replace with an optimised lookahead that calculates all tokens at once.
+# Remember Llama natively handles low-temp sampling to changing the temperature for
+# branch generation might be a parameter for the user to set.
                 for _ in range(self.lookahead_depth):
                     next_lp = context.query_next(branch_ctx)
                     if next_lp is None:
