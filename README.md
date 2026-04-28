@@ -2,7 +2,9 @@
 
 # probLM-solver
 
-A python library and CLI app built on top of llama.cpp which can generate and modify language model outputs based on internal probabilities. Included are utilities for generating large numbers of LLM outputs for performing statistical analysis, as well as outputting token-by-token conditional probabilities for a given output.
+A python library and CLI app built on top of llama.cpp which can generate and modify language model outputs based on internal probabilities. Included are utilities for generating large numbers of LLM outputs for performing statistical analysis, as well as outputting and modifying token-by-token conditional probabilities for a given output.
+
+Of particular importance is the ability to define sampling functions for token generation, based off of the answer's power distribution, via iteratively sampling branches of future tokens.
 
 ## Using
 
