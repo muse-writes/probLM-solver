@@ -10,6 +10,7 @@ that allows for easy creation and application of token-by-token sampling methods
 
 - :doc:`api` — Full API reference
 - :doc:`tutorials` — Tutorials and how to get started.
+- :doc:`background` — Background info and motivation for this program.
 - `GitHub <https://github.com/muse-writes/probLM-solver>`_
 - `Changelog <https://github.com/muse-writes/probLM-solver/blob/main/CHANGELOG.md>`_
 
@@ -20,3 +21,4 @@ that allows for easy creation and application of token-by-token sampling methods
 
    api
    tutorials
+   background
