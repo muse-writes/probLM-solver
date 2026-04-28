@@ -9,6 +9,7 @@ that allows for easy creation and application of token-by-token sampling methods
 .. rubric:: Quick links
 
 - :doc:`api` — Full API reference
+- :doc:`tutorials` — Tutorials and how to get started.
 - `GitHub <https://github.com/muse-writes/probLM-solver>`_
 - `Changelog <https://github.com/muse-writes/probLM-solver/blob/main/CHANGELOG.md>`_
 
@@ -18,3 +19,4 @@ that allows for easy creation and application of token-by-token sampling methods
    :caption: Reference
 
    api
+   tutorials
