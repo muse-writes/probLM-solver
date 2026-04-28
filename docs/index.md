@@ -1,3 +1,3 @@
 # probLM-solver
 
-A python library built on top of llama.cpp which generates and performs statistical analysis on language model outputs.
+A python library built on top of llama.cpp which facilitates the use of new sampling techniques for improved token generation.
