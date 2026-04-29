@@ -15,6 +15,14 @@ def _make_llama_mock(response_text: str = 'Mock response.') -> MagicMock:
     mock_llm.create_chat_completion.return_value = {
         'choices': [{'message': {'content': response_text}}]
     }
+    mock_llm.metadata = {
+        'general.architecture': 'llama',
+        'llama.block_count': '32',
+        'llama.attention.head_count_kv': '8',
+        'llama.attention.head_count': '32',
+        'llama.embedding_length': '4096',
+    }
+    mock_llm.n_ctx.return_value = 2048
     return mock_llm
 
 
@@ -37,7 +45,7 @@ class TestModelInstanceInit:
         from problm_solver.llama_interface import ModelInstance
 
         with patch('problm_solver.llama_interface.Llama') as MockLlama:
-            MockLlama.return_value = MagicMock()
+            MockLlama.return_value = _make_llama_mock()
             ModelInstance(fname='fake.gguf', context='Hello')
             _, kwargs = MockLlama.call_args
             assert kwargs.get('logits_all') is False
@@ -47,10 +55,22 @@ class TestModelInstanceInit:
         from problm_solver.llama_interface import ModelInstance
 
         with patch('problm_solver.llama_interface.Llama') as MockLlama:
-            MockLlama.return_value = MagicMock()
+            MockLlama.return_value = _make_llama_mock()
             ModelInstance(fname='fake.gguf', context='Hello', logits_all=True)
             _, kwargs = MockLlama.call_args
             assert kwargs.get('logits_all') is True
+
+    def test_cache_sized_from_model_metadata(self) -> None:
+        """LlamaRAMCache capacity is derived from model metadata and n_ctx."""
+        from problm_solver.llama_interface import ModelInstance
+
+        with patch('problm_solver.llama_interface.Llama') as MockLlama, \
+             patch('problm_solver.llama_interface.LlamaRAMCache') as MockCache:
+            MockLlama.return_value = _make_llama_mock()
+            ModelInstance(fname='fake.gguf', context='Hello')
+            _, kwargs = MockCache.call_args
+            # 4 states × (2048 ctx × 2 K&V × 32 layers × 8 KV heads × 128 head_dim × 2 bytes)
+            assert kwargs.get('capacity_bytes') == 4 * 2048 * 2 * 32 * 8 * 128 * 2
 
 
 class TestModelInstanceQuery:
@@ -236,6 +256,30 @@ def _make_branch_completion(token_logprobs: list) -> dict:
             'finish_reason': 'length' if token_logprobs else 'stop',
         }]
     }
+
+
+class TestModelInstancePrimeCache:
+    """Tests for ModelInstance.prime_cache."""
+
+    def test_calls_create_completion_with_context(self, model_instance) -> None:
+        """prime_cache() passes context_tokens as the positional prompt argument."""
+        context = [10, 20, 30]
+        model_instance.prime_cache(context)
+        args, _ = model_instance._llm.create_completion.call_args
+        assert args[0] == context
+
+    def test_passes_max_tokens_1(self, model_instance) -> None:
+        """prime_cache() calls create_completion with max_tokens=1."""
+        model_instance.prime_cache([1, 2, 3])
+        _, kwargs = model_instance._llm.create_completion.call_args
+        assert kwargs.get('max_tokens') == 1
+
+    def test_saves_state_after_priming(self, model_instance) -> None:
+        """prime_cache() calls save_state() after create_completion returns."""
+        from unittest.mock import call, patch
+        with patch.object(model_instance, 'save_state') as mock_save:
+            model_instance.prime_cache([1, 2, 3])
+            mock_save.assert_called_once()
 
 
 class TestModelInstanceQueryBranch:

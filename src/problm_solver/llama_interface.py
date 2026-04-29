@@ -1,11 +1,12 @@
 """llama.cpp python interface for running local models."""
 
 import math
+from copy import deepcopy
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-from llama_cpp import Llama
+from llama_cpp import Llama, LlamaRAMCache
 from llama_cpp.llama_chat_format import Jinja2ChatFormatter
 
 from problm_solver.adjust_probs import AdjustFn, GenerationContext
@@ -20,12 +21,36 @@ class ModelInstance:
     def __init__(self, fname: str, context: str, logits_all: bool = False) -> None:
         """Initialize Llama instance and store context.
 
+        The RAM cache capacity is derived from the model's own metadata so
+        that it can hold four full KV-cache states. One state covers the
+        entire context window for all layers and KV heads at fp16 precision:
+
+            bytes_per_state = n_ctx × 2 × n_layers × n_kv_heads × head_dim × 2
+
+        Four states comfortably accommodates the save/restore pattern used by
+        :class:`~problm_solver.adjust_probs.SamplePowerDist`: the saved
+        pre-branch snapshot, the current working state, and spare capacity
+        for shared prefix entries.
+
         :param fname: absolute path of the model .gguf file.
         :param context: query that the model is initialised with.
         :param logits_all: whether or not probability logging is necessary in the Llama instance.
         """
         self._llm = Llama(model_path=fname, n_ctx=2048, logits_all=logits_all)
+
+        arch       = self._llm.metadata['general.architecture']
+        n_layers   = int(self._llm.metadata[f'{arch}.block_count'])
+        n_kv_heads = int(self._llm.metadata[f'{arch}.attention.head_count_kv'])
+        n_heads    = int(self._llm.metadata[f'{arch}.attention.head_count'])
+        head_dim   = int(self._llm.metadata[f'{arch}.embedding_length']) // n_heads
+        bytes_per_state = self._llm.n_ctx() * 2 * n_layers * n_kv_heads * head_dim * 2
+
+        self._cache = LlamaRAMCache(capacity_bytes=4 * bytes_per_state)
+        self._llm.set_cache(self._cache)
         self.context = context
+
+# State variable for saving KV cache and other context.
+        self._saved_cache: LlamaRAMCache = None
 
 
     def query_n_times(self, n: int) -> npt.NDArray[Any]:
@@ -142,6 +167,36 @@ class ModelInstance:
         return float(sum(lp for lp in token_logprobs if lp is not None))
 
 
+    def prime_cache(self, context_tokens: list[int]) -> None:
+        """Advance the KV cache to context_tokens and snapshot the state.
+
+        Calls ``create_completion`` with ``max_tokens=1`` to force the model
+        to process ``context_tokens`` and write the resulting KV state into
+        the RAM cache, then immediately snapshots via :meth:`save_state`. The
+        single generated token is discarded — this call exists purely as a
+        cache-warming side effect.
+
+        Should be called once per candidate token before the branch sampling
+        loop. Pair with :meth:`restore_state` to reset to this snapshot before
+        each branch.
+
+        :param context_tokens: Token ID sequence to advance the cache to.
+        """
+        self._llm.create_completion(context_tokens, max_tokens=1)
+        self.save_state()
+
+
+    def save_state(self) -> None:
+        """Make an internal copy of the model's state."""
+        self._saved_cache = deepcopy(self._cache)
+
+
+    def restore_state(self) -> None:
+        """Overwrite the model's internal state."""
+        self._cache = deepcopy(self._saved_cache)
+        self._llm.set_cache(self._cache)
+
+
     def get_tokenizer(self) -> LlamaTokenizer:
         """Exposes a LlamaTokenizer backed by this model's vocabulary.
 
@@ -218,6 +273,8 @@ class ModelInstance:
                     else None
                 ),
                 query_branch=lambda ctx_ids, depth: self.query_branch(ctx_ids, depth),
+                prime_cache=self.prime_cache,
+                restore_state=self.restore_state,
                 tokenize_token=lambda s: self._llm.tokenize(
                     s.encode('utf-8'), add_bos=False, special=False,
                 ),
