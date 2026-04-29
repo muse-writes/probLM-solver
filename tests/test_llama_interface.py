@@ -225,6 +225,74 @@ def _make_next_token_completion(top_logprobs: dict) -> dict:
     }
 
 
+def _make_branch_completion(token_logprobs: list) -> dict:
+    """Build a create_completion return value with the given token_logprobs list."""
+    return {
+        'choices': [{
+            'logprobs': {
+                'token_logprobs': token_logprobs,
+                'tokens': ['token'] * len(token_logprobs),
+            },
+            'finish_reason': 'length' if token_logprobs else 'stop',
+        }]
+    }
+
+
+class TestModelInstanceQueryBranch:
+    """Tests for ModelInstance.query_branch."""
+
+    @pytest.fixture()
+    def branch_model(self, model_instance):
+        """Configure the mock LLM to return a branch completion response."""
+        model_instance._llm.create_completion.return_value = _make_branch_completion(
+            [-0.5, -1.0, -0.3]
+        )
+        return model_instance
+
+    def test_returns_float(self, branch_model) -> None:
+        """query_branch() returns a float."""
+        result = branch_model.query_branch([1, 2, 3], max_tokens=3)
+        assert isinstance(result, float)
+
+    def test_sums_token_logprobs(self, branch_model) -> None:
+        """result equals the sum of all token_logprobs entries."""
+        result = branch_model.query_branch([1, 2, 3], max_tokens=3)
+        assert result == pytest.approx(-0.5 + -1.0 + -0.3)
+
+    def test_returns_zero_for_immediate_eos(self, model_instance) -> None:
+        """Returns 0.0 when token_logprobs is empty (model generates EOS immediately)."""
+        model_instance._llm.create_completion.return_value = _make_branch_completion([])
+        result = model_instance.query_branch([1, 2, 3], max_tokens=5)
+        assert result == 0.0
+
+    def test_partial_branch_sums_available_logprobs(self, model_instance) -> None:
+        """When EOS stops generation early, only the available logprobs are summed."""
+        model_instance._llm.create_completion.return_value = _make_branch_completion(
+            [-0.5, -1.0]  # only 2 of the requested 5 tokens were generated
+        )
+        result = model_instance.query_branch([1, 2, 3], max_tokens=5)
+        assert result == pytest.approx(-0.5 + -1.0)
+
+    def test_passes_context_tokens_as_prompt(self, branch_model) -> None:
+        """create_completion receives context_tokens as its positional argument."""
+        context = [10, 20, 30]
+        branch_model.query_branch(context, max_tokens=3)
+        args, _ = branch_model._llm.create_completion.call_args
+        assert args[0] == context
+
+    def test_passes_max_tokens(self, branch_model) -> None:
+        """create_completion is called with the correct max_tokens."""
+        branch_model.query_branch([1, 2, 3], max_tokens=7)
+        _, kwargs = branch_model._llm.create_completion.call_args
+        assert kwargs.get('max_tokens') == 7
+
+    def test_passes_logprobs_1(self, branch_model) -> None:
+        """create_completion is called with logprobs=1 to enable token_logprobs."""
+        branch_model.query_branch([1, 2, 3], max_tokens=3)
+        _, kwargs = branch_model._llm.create_completion.call_args
+        assert kwargs.get('logprobs') == 1
+
+
 class TestQueryLogProbsNextToken:
     """Tests for ModelInstance.query_log_probs_next_token."""
 

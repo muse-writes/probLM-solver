@@ -114,6 +114,34 @@ class ModelInstance:
         )
 
 
+    def query_branch(self, context_tokens: list[int], max_tokens: int) -> float:
+        """Generate a branch of up to max_tokens and return its total log-probability.
+
+        Makes a single ``create_completion`` call with ``logprobs=1`` so that
+        llama_cpp populates ``token_logprobs`` — the log-probability of each
+        actually-sampled token under the full model vocabulary. The values are
+        summed to give the branch log-probability.
+
+        If EOS is reached before ``max_tokens``, the shorter response is
+        returned with no penalty, matching the early-EOS behaviour of the
+        previous token-by-token loop.
+
+        :param context_tokens: The current context as a list of integer token IDs.
+        :param max_tokens: Maximum number of tokens to generate in the branch.
+        :returns: Sum of per-token log-probabilities for all generated tokens,
+            or ``0.0`` if the model generates EOS immediately.
+        """
+        output = self._llm.create_completion(
+            context_tokens,
+            max_tokens=max_tokens,
+            logprobs=1,
+        )
+        token_logprobs: list[float | None] = (
+            output['choices'][0]['logprobs']['token_logprobs']
+        )
+        return float(sum(lp for lp in token_logprobs if lp is not None))
+
+
     def get_tokenizer(self) -> LlamaTokenizer:
         """Exposes a LlamaTokenizer backed by this model's vocabulary.
 
@@ -189,6 +217,7 @@ class ModelInstance:
                     if (r := self.query_log_probs_next_token(ctx_ids, n_tokens)) is not None
                     else None
                 ),
+                query_branch=lambda ctx_ids, depth: self.query_branch(ctx_ids, depth),
                 tokenize_token=lambda s: self._llm.tokenize(
                     s.encode('utf-8'), add_bos=False, special=False,
                 ),

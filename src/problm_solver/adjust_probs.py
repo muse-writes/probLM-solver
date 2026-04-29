@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-from problm_solver.analysis.probabilities import prob_of_token, sample_from_logprobs
 from problm_solver.utils import _as_rng
 
 
@@ -27,6 +26,9 @@ class GenerationContext:
     :param query_next: Queries the model for the top-M next-token log-prob
         dict given a context token ID list. Pre-bound to the current
         ``n_tokens``. Returns ``None`` on EOS.
+    :param query_branch: Generates a complete branch of up to ``depth`` tokens
+        from the given context in a single model call and returns the sum of
+        per-token log-probabilities. Returns ``0.0`` on immediate EOS.
     :param tokenize_token: Converts a single token string to its token ID(s).
     """
 
@@ -34,6 +36,7 @@ class GenerationContext:
     prev_probs: list[float]
     context_tokens: list[int]
     query_next: Callable[[list[int]], dict[str, float] | None]
+    query_branch: Callable[[list[int], int], float]
     tokenize_token: Callable[[str], list[int]]
 
 
@@ -175,7 +178,8 @@ class MetropolisSampler(BranchSampler):
         self,
         equil_branches: int = 5,
         max_branches: int = 30,
-        tolerance: float = 1e-2,
+# TODO(Clio): Investigate viable convergence tolerances.
+        tolerance: float = 1e-1,
         rng: np.random.Generator | int | None = None
     ) -> None:
         """Initialise with convergence parameters."""
@@ -255,7 +259,9 @@ class SamplePowerDist:
     For each candidate next token, repeatedly proposes complete future
     branches of length ``lookahead_depth`` and updates a Markov chain using the
     injected :class:`BranchSampler` (e.g. Metropolis-Hastings), continuing
-    until :meth:`~BranchSampler.should_continue` signals convergence. The
+    until :meth:`~BranchSampler.should_continue` signals convergence. Each
+    branch is evaluated in a single model call via
+    :attr:`~GenerationContext.query_branch`, rather than token-by-token. The
     accepted branch log-probabilities are kept as a ``numpy`` array and
     combined with the current token's log-probability via log-sum-exp to
     produce the adjusted distribution.
@@ -316,20 +322,9 @@ class SamplePowerDist:
 
             while True:
                 branch_ctx = list(context.context_tokens) + token_ids
-                proposed_branch_log_prob = 0.0
-
-# TODO(Clio): Replace with an optimised lookahead that calculates all tokens at once.
-# Remember Llama natively handles low-temp sampling to changing the temperature for
-# branch generation might be a parameter for the user to set.
-                for _ in range(self.lookahead_depth):
-                    next_lp = context.query_next(branch_ctx)
-                    if next_lp is None:
-                        break  # EOS — keep partial log_prob, no penalty
-                    next_token = sample_from_logprobs(next_lp)
-                    proposed_branch_log_prob += float(
-                        np.log(prob_of_token(next_token, next_lp))
-                    )
-                    branch_ctx = branch_ctx + context.tokenize_token(next_token)
+                proposed_branch_log_prob = context.query_branch(
+                    branch_ctx, self.lookahead_depth
+                )
 
                 accepted_log_prob = self.branch_sampler.step(
                     proposed_log_prob=proposed_branch_log_prob,

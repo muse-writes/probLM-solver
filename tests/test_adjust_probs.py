@@ -28,6 +28,7 @@ def basic_context() -> GenerationContext:
         prev_probs=[],
         context_tokens=[1, 2, 3],
         query_next=MagicMock(return_value={' a': -0.5, ' b': -1.0}),
+        query_branch=MagicMock(return_value=-1.5),
         tokenize_token=MagicMock(return_value=[99]),
     )
 
@@ -43,7 +44,7 @@ def context_with_prev(basic_context: GenerationContext) -> GenerationContext:
 def power_dist_context() -> GenerationContext:
     """Return a GenerationContext suitable for SamplePowerDist tests.
 
-    Two candidate tokens, query_next always returns a two-token distribution,
+    Two candidate tokens, query_branch always returns a fixed log-prob,
     tokenize_token always returns [99].
     """
     return GenerationContext(
@@ -51,6 +52,7 @@ def power_dist_context() -> GenerationContext:
         prev_probs=[],
         context_tokens=[1, 2, 3],
         query_next=MagicMock(return_value={' a': -0.5, ' b': -1.0}),
+        query_branch=MagicMock(return_value=-1.5),
         tokenize_token=MagicMock(return_value=[99]),
     )
 
@@ -77,6 +79,10 @@ class TestGenerationContext:
     def test_query_next_is_callable(self, basic_context: GenerationContext) -> None:
         """query_next field is callable."""
         assert callable(basic_context.query_next)
+
+    def test_query_branch_is_callable(self, basic_context: GenerationContext) -> None:
+        """query_branch field is callable."""
+        assert callable(basic_context.query_branch)
 
     def test_tokenize_token_is_callable(self, basic_context: GenerationContext) -> None:
         """tokenize_token field is callable."""
@@ -190,6 +196,7 @@ class TestSampleLowTempCall:
             prev_probs=[],
             context_tokens=[],
             query_next=MagicMock(),
+            query_branch=MagicMock(),
             tokenize_token=MagicMock(),
         )
         result = adj(ctx)
@@ -202,6 +209,7 @@ class TestSampleLowTempCall:
             prev_probs=[],
             context_tokens=[],
             query_next=MagicMock(),
+            query_branch=MagicMock(),
             tokenize_token=MagicMock(),
         )
         result = SampleLowTemp(alpha=1)(ctx)
@@ -214,6 +222,7 @@ class TestSampleLowTempCall:
             prev_probs=[],
             context_tokens=[],
             query_next=MagicMock(),
+            query_branch=MagicMock(),
             tokenize_token=MagicMock(),
         )
         assert SampleLowTemp(alpha=1)(ctx) != SampleLowTemp(alpha=3)(ctx)
@@ -391,13 +400,13 @@ class TestSamplePowerDistCall:
         result = spd(power_dist_context)
         assert all(isinstance(v, float) for v in result.values())
 
-    def test_query_next_called_for_each_branch_step(
+    def test_query_branch_called_for_each_candidate_token(
         self, spd: SamplePowerDist, power_dist_context: GenerationContext
     ) -> None:
-        """query_next is called n_candidates * lookahead_depth times (one branch each)."""
+        """query_branch is called once per branch per candidate token."""
         spd(power_dist_context)
-        # 2 candidates * 1 branch * 2 depth = 4 calls
-        assert power_dist_context.query_next.call_count == 4
+        # 2 candidates * 1 branch each = 2 calls
+        assert power_dist_context.query_branch.call_count == 2
 
     def test_branch_sampler_reset_called_per_branch(
         self, spd: SamplePowerDist, mock_sampler: MagicMock,
@@ -437,47 +446,41 @@ class TestSamplePowerDistCall:
         # 2 candidates * 3 branches each = 6 should_continue calls
         assert mock_sampler.should_continue.call_count == 6
 
-    def test_early_eos_stops_branch_without_penalty(
+    def test_query_branch_result_passed_to_step(
         self, mock_sampler: MagicMock
     ) -> None:
-        """When query_next returns None, the branch stops and sample() is not called."""
-        spd = SamplePowerDist(
-            alpha=1.0, lookahead_depth=5, branch_sampler=mock_sampler
-        )
+        """The float returned by query_branch is passed directly to branch_sampler.step."""
+        mock_sampler.step.side_effect = lambda proposed_log_prob, **_: proposed_log_prob
+        spd = SamplePowerDist(alpha=1.0, lookahead_depth=5, branch_sampler=mock_sampler)
         ctx = GenerationContext(
             token_probs={' hello': -0.5},
             prev_probs=[],
             context_tokens=[1, 2],
-            query_next=MagicMock(return_value=None),  # EOS immediately
+            query_next=MagicMock(),
+            query_branch=MagicMock(return_value=-2.5),
             tokenize_token=MagicMock(return_value=[99]),
         )
-        result = spd(ctx)
-        mock_sampler.step.assert_called()
-        assert isinstance(result, dict)
-        assert ' hello' in result
+        spd(ctx)
+        mock_sampler.step.assert_called_once_with(
+            proposed_log_prob=-2.5, alpha=1.0
+        )
 
-    def test_eos_mid_branch_uses_partial_log_prob(
+    def test_query_branch_called_with_correct_depth(
         self, mock_sampler: MagicMock
     ) -> None:
-        """A branch that hits EOS mid-way uses its partial log-prob, not 0."""
-        query_next = MagicMock(side_effect=[
-            {' a': -0.5, ' b': -1.0},  # depth 0: valid
-            None,                        # depth 1: EOS
-        ])
-        spd = SamplePowerDist(
-            alpha=1.0, lookahead_depth=3, branch_sampler=mock_sampler
-        )
+        """query_branch is called with lookahead_depth as its depth argument."""
+        spd = SamplePowerDist(alpha=1.0, lookahead_depth=4, branch_sampler=mock_sampler)
         ctx = GenerationContext(
             token_probs={' hello': -0.5},
             prev_probs=[],
             context_tokens=[1],
-            query_next=query_next,
+            query_next=MagicMock(),
+            query_branch=MagicMock(return_value=-1.0),
             tokenize_token=MagicMock(return_value=[99]),
         )
-        result = spd(ctx)
-        # one MH step for one completed branch
-        assert mock_sampler.step.call_count == 1
-        assert np.isfinite(result[' hello'])
+        spd(ctx)
+        args, _ = ctx.query_branch.call_args
+        assert args[1] == 4
 
 
 # ---------------------------------------------------------------------------
