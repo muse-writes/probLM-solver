@@ -1,3 +1,11 @@
+## v1.1.0 (2026-04-29)
+
+### Feat
+
+- Added constants.py (for useful constants)
+- SamplePowerDist can now save and reset model state.
+- SamplePowerDist now evaluates branch logprob from 1 Llama call.
+
 ## v1.0.1 (2026-04-29)
 
 ### BREAKING CHANGE
