@@ -29,13 +29,6 @@ class GenerationContext:
     :param query_branch: Generates a complete branch of up to ``depth`` tokens
         from the given context in a single model call and returns the sum of
         per-token log-probabilities. Returns ``0.0`` on immediate EOS.
-    :param prime_cache: Processes the given context tokens to advance the KV
-        cache to that point and snapshots the state, ready for repeated branch
-        sampling. Should be called once per candidate token before the branch
-        loop.
-    :param restore_state: Resets the KV cache to the last snapshot taken by
-        ``prime_cache``. Must be called before every ``query_branch`` call in
-        the branch loop so that each branch starts from a clean state.
     :param tokenize_token: Converts a single token string to its token ID(s).
     """
 
@@ -44,8 +37,6 @@ class GenerationContext:
     context_tokens: list[int]
     query_next: Callable[[list[int]], dict[str, float] | None]
     query_branch: Callable[[list[int], int], float]
-    prime_cache: Callable[[list[int]], None]
-    restore_state: Callable[[], None]
     tokenize_token: Callable[[str], list[int]]
 
 
@@ -330,10 +321,7 @@ class SamplePowerDist:
             branch_log_probs_list: list[float] = []
             self.branch_sampler.reset()
 
-            context.prime_cache(branch_ctx)
-
             while True:
-                context.restore_state()
                 proposed_branch_log_prob = context.query_branch(
                     branch_ctx, self.lookahead_depth
                 )

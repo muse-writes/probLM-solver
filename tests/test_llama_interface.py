@@ -258,30 +258,6 @@ def _make_branch_completion(token_logprobs: list) -> dict:
     }
 
 
-class TestModelInstancePrimeCache:
-    """Tests for ModelInstance.prime_cache."""
-
-    def test_calls_create_completion_with_context(self, model_instance) -> None:
-        """prime_cache() passes context_tokens as the positional prompt argument."""
-        context = [10, 20, 30]
-        model_instance.prime_cache(context)
-        args, _ = model_instance._llm.create_completion.call_args
-        assert args[0] == context
-
-    def test_passes_max_tokens_1(self, model_instance) -> None:
-        """prime_cache() calls create_completion with max_tokens=1."""
-        model_instance.prime_cache([1, 2, 3])
-        _, kwargs = model_instance._llm.create_completion.call_args
-        assert kwargs.get('max_tokens') == 1
-
-    def test_saves_state_after_priming(self, model_instance) -> None:
-        """prime_cache() calls save_state() after create_completion returns."""
-        from unittest.mock import call, patch
-        with patch.object(model_instance, 'save_state') as mock_save:
-            model_instance.prime_cache([1, 2, 3])
-            mock_save.assert_called_once()
-
-
 class TestModelInstanceQueryBranch:
     """Tests for ModelInstance.query_branch."""
 

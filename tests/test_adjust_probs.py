@@ -29,8 +29,6 @@ def basic_context() -> GenerationContext:
         context_tokens=[1, 2, 3],
         query_next=MagicMock(return_value={' a': -0.5, ' b': -1.0}),
         query_branch=MagicMock(return_value=-1.5),
-        prime_cache=MagicMock(),
-        restore_state=MagicMock(),
         tokenize_token=MagicMock(return_value=[99]),
     )
 
@@ -55,8 +53,6 @@ def power_dist_context() -> GenerationContext:
         context_tokens=[1, 2, 3],
         query_next=MagicMock(return_value={' a': -0.5, ' b': -1.0}),
         query_branch=MagicMock(return_value=-1.5),
-        prime_cache=MagicMock(),
-        restore_state=MagicMock(),
         tokenize_token=MagicMock(return_value=[99]),
     )
 
@@ -87,14 +83,6 @@ class TestGenerationContext:
     def test_query_branch_is_callable(self, basic_context: GenerationContext) -> None:
         """query_branch field is callable."""
         assert callable(basic_context.query_branch)
-
-    def test_prime_cache_is_callable(self, basic_context: GenerationContext) -> None:
-        """prime_cache field is callable."""
-        assert callable(basic_context.prime_cache)
-
-    def test_restore_state_is_callable(self, basic_context: GenerationContext) -> None:
-        """restore_state field is callable."""
-        assert callable(basic_context.restore_state)
 
     def test_tokenize_token_is_callable(self, basic_context: GenerationContext) -> None:
         """tokenize_token field is callable."""
@@ -209,8 +197,6 @@ class TestSampleLowTempCall:
             context_tokens=[],
             query_next=MagicMock(),
             query_branch=MagicMock(),
-            prime_cache=MagicMock(),
-            restore_state=MagicMock(),
             tokenize_token=MagicMock(),
         )
         result = adj(ctx)
@@ -224,8 +210,6 @@ class TestSampleLowTempCall:
             context_tokens=[],
             query_next=MagicMock(),
             query_branch=MagicMock(),
-            prime_cache=MagicMock(),
-            restore_state=MagicMock(),
             tokenize_token=MagicMock(),
         )
         result = SampleLowTemp(alpha=1)(ctx)
@@ -239,8 +223,6 @@ class TestSampleLowTempCall:
             context_tokens=[],
             query_next=MagicMock(),
             query_branch=MagicMock(),
-            prime_cache=MagicMock(),
-            restore_state=MagicMock(),
             tokenize_token=MagicMock(),
         )
         assert SampleLowTemp(alpha=1)(ctx) != SampleLowTemp(alpha=3)(ctx)
@@ -476,8 +458,6 @@ class TestSamplePowerDistCall:
             context_tokens=[1, 2],
             query_next=MagicMock(),
             query_branch=MagicMock(return_value=-2.5),
-            prime_cache=MagicMock(),
-            restore_state=MagicMock(),
             tokenize_token=MagicMock(return_value=[99]),
         )
         spd(ctx)
@@ -496,50 +476,13 @@ class TestSamplePowerDistCall:
             context_tokens=[1],
             query_next=MagicMock(),
             query_branch=MagicMock(return_value=-1.0),
-            prime_cache=MagicMock(),
-            restore_state=MagicMock(),
             tokenize_token=MagicMock(return_value=[99]),
         )
         spd(ctx)
         args, _ = ctx.query_branch.call_args
         assert args[1] == 4
 
-    def test_prime_cache_called_once_per_candidate_token(
-        self, spd: SamplePowerDist, power_dist_context: GenerationContext
-    ) -> None:
-        """prime_cache is called exactly once per candidate token."""
-        spd(power_dist_context)
-        # 2 candidate tokens
-        assert power_dist_context.prime_cache.call_count == 2
 
-    def test_prime_cache_called_with_branch_ctx(
-        self, mock_sampler: MagicMock
-    ) -> None:
-        """prime_cache receives context_tokens + tokenized candidate token."""
-        spd = SamplePowerDist(alpha=1.0, lookahead_depth=2, branch_sampler=mock_sampler)
-        ctx = GenerationContext(
-            token_probs={' hi': -0.5},
-            prev_probs=[],
-            context_tokens=[1, 2],
-            query_next=MagicMock(),
-            query_branch=MagicMock(return_value=-1.0),
-            prime_cache=MagicMock(),
-            restore_state=MagicMock(),
-            tokenize_token=MagicMock(return_value=[99]),
-        )
-        spd(ctx)
-        args, _ = ctx.prime_cache.call_args
-        assert args[0] == [1, 2, 99]  # context_tokens + token_ids
-
-    def test_restore_state_called_before_each_branch(
-        self, spd: SamplePowerDist, power_dist_context: GenerationContext
-    ) -> None:
-        """restore_state is called once per branch, matching query_branch call count."""
-        spd(power_dist_context)
-        assert (
-            power_dist_context.restore_state.call_count
-            == power_dist_context.query_branch.call_count
-        )
 
 
 # ---------------------------------------------------------------------------
