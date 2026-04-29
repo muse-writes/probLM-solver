@@ -162,9 +162,10 @@ class MetropolisSampler(BranchSampler):
     Convergence across accepted branch samples is assessed via the standard
     error of the mean (SEM): ``SEM = std(branch_log_probs) / sqrt(n)``.
     Sampling continues until ``SEM < tolerance``, after at least
-    ``min_branches`` samples, and always stops at ``max_branches``.
+    ``equil_branches`` samples, and always stops at ``max_branches``.
 
-    :param min_branches: Minimum accepted samples before checking SEM.
+    :param equil_branches: Number of accepted samples treated as burn-in
+        (equilibration); discarded before checking SEM.
     :param max_branches: Hard upper limit on accepted samples.
     :param tolerance: SEM threshold below which sampling is considered
         converged.
@@ -172,14 +173,14 @@ class MetropolisSampler(BranchSampler):
 
     def __init__(
         self,
-        min_branches: int = 5,
-        max_branches: int = 50,
+        equil_branches: int = 5,
+        max_branches: int = 30,
         tolerance: float = 1e-2,
         rng: np.random.Generator | int | None = None
     ) -> None:
         """Initialise with convergence parameters."""
         self._current_log_prob: float | None = None
-        self._min_branches = min_branches
+        self._equil_branches = equil_branches
         self._max_branches = max_branches
         self._tolerance = tolerance
         self._rng = _as_rng(rng)
@@ -227,21 +228,24 @@ class MetropolisSampler(BranchSampler):
     def should_continue(self, branch_log_probs: npt.NDArray[np.float64]) -> bool:
         """Return ``True`` if more proposals should be sampled.
 
-        Uses SEM-based convergence after ``min_branches`` and before
+        Uses SEM-based convergence after ``equil_branches`` and before
         ``max_branches``.
 
         :param: branch logarithmic probabilities to date.
         """
         n = len(branch_log_probs)
-        if n < self._min_branches:
+        if n < self._equil_branches:
             return True
         if n >= self._max_branches:
             return False
 # TODO(Clio): Write proper equilibration algorithm?? Allow input control?
 # Discard equilibration probabilities in SEM calculation.
-# set to > min_branches a.t.m.
+# set to > equil_branches a.t.m.
 # Noise in probabilities is likely to be quite high, think more about this.
-        sem = float(np.std(branch_log_probs[self._min_branches:]) / np.sqrt(n))
+        post_eq = branch_log_probs[self._equil_branches:]
+        if len(post_eq) <= 1:
+            return True
+        sem = float(np.std(post_eq) / np.sqrt(len(post_eq)))
         return sem >= self._tolerance
 
 

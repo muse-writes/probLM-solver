@@ -290,25 +290,25 @@ class TestMetropolisSampler:
             assert accepted == proposal
 
     def test_should_continue_returns_true_below_min_branches(self) -> None:
-        """should_continue returns True when fewer than min_branches collected."""
-        sampler = MetropolisSampler(min_branches=5)
+        """should_continue returns True when fewer than equil_branches collected."""
+        sampler = MetropolisSampler(equil_branches=5)
         for n in range(1, 5):
             lp = np.zeros(n)
             assert sampler.should_continue(lp) is True
 
     def test_should_continue_returns_false_at_max_branches(self) -> None:
         """should_continue returns False when max_branches is reached."""
-        sampler = MetropolisSampler(min_branches=1, max_branches=10)
+        sampler = MetropolisSampler(equil_branches=1, max_branches=10)
         assert sampler.should_continue(np.zeros(10)) is False
 
     def test_should_continue_returns_false_when_sem_below_tolerance(self) -> None:
         """should_continue returns False when SEM of branch log-probs < tolerance."""
-        sampler = MetropolisSampler(min_branches=3, tolerance=0.1)
+        sampler = MetropolisSampler(equil_branches=3, tolerance=0.1)
         assert sampler.should_continue(np.array([1.0, 1.0, 1.0, 1.0, 1.0])) is False
 
     def test_should_continue_returns_true_when_sem_above_tolerance(self) -> None:
         """should_continue returns True when SEM of branch log-probs >= tolerance."""
-        sampler = MetropolisSampler(min_branches=3, tolerance=0.01)
+        sampler = MetropolisSampler(equil_branches=3, tolerance=0.01)
         assert sampler.should_continue(np.array([-10.0, 0.0, 10.0, -10.0, 10.0])) is True
 
 
