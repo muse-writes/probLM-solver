@@ -1,3 +1,22 @@
+## v1.0.1 (2026-04-29)
+
+### BREAKING CHANGE
+
+- Function probability adjustment changed to take a
+context dataclass as input.
+
+### Feat
+
+- Added function for power sampling using MCMC to cli.py
+- Added context dataclass and support for power sampling.
+
+### Fix
+
+- Metropolis method properly discards equil in SEM calculation.
+- Added more detailed docstrings and an equilibration period for MCMC
+- Migrated from legacy rng to np.random.Generator.
+- Properly renamed AdjustPower etc. to SampleLowTemp, fixed tests.
+
 ## v1.0.0 (2026-04-22)
 
 ### Feat
