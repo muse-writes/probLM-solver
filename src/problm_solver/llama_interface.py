@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-from llama_cpp import Llama, LlamaRAMCache
+from llama_cpp import Llama, LlamaRAMCache, LlamaState
 from llama_cpp.llama_chat_format import Jinja2ChatFormatter
 
 from problm_solver.adjust_probs import AdjustFn, GenerationContext
@@ -48,6 +48,8 @@ class ModelInstance:
         self._llm.set_cache(self._cache)
         self.context = context
 
+
+## -- Methods for querying the LLM. -- ##
 
     def query_n_times(self, n: int) -> npt.NDArray[Any]:
         """Query the LLM with the same context N times, return the output.
@@ -163,6 +165,28 @@ class ModelInstance:
         return float(sum(lp for lp in token_logprobs if lp is not None))
 
 
+## -- Miscellaneous -- ##
+
+    def reset_state(self) -> None:
+        """Reset model state. Low-level Llama API."""
+        self._llm.reset()
+
+
+    def eval_tokens(self, tokens: list[int]) -> None:
+        """Evaluate tokens. Low-level Llama API."""
+        self._llm.eval(tokens)
+
+
+    def save_live_state(self) -> LlamaState:
+        """Return LlamaState object."""
+        self._llm.save_state()
+
+
+    def load_live_state(self, state: LlamaState) -> None:
+        """Restore LlamaState object."""
+        self._llm.load_state(state)
+
+
     def get_tokenizer(self) -> LlamaTokenizer:
         """Exposes a LlamaTokenizer backed by this model's vocabulary.
 
@@ -197,6 +221,7 @@ class ModelInstance:
             special=True,
         )
 
+## -- Adjusting probabilities -- ##
 
     def generate_adjusted(
         self,
