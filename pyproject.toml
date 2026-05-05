@@ -45,7 +45,8 @@ dev = [
   "typeguard (>=4.4.1)",
   "sphinx (>=9.1.0)",
   "sphinx-autodoc-typehints (>=3.10.2)",
-  "shibuya (>=2026.1.9)"
+  "shibuya (>=2026.1.9)",
+  "mutmut>=3.5.0",
 ]
 
 [tool.codespell]  # https://github.com/codespell-project/codespell
@@ -117,6 +118,10 @@ convention = "pep257"
 [tool.ty.rules]
 unused-ignore-comment = "warn"
 
+[tool.mutmut]
+source_paths = ["src/"]
+pytest_add_cli_args_test_selection = ["tests/"]
+
 [tool.ty.terminal]
 error-on-warning = true
 
@@ -154,6 +159,10 @@ type = "virtualenv"
       --all-files
       --color always
     """
+
+  [tool.poe.tasks.mutmut]
+  help = "Run mutation tests"
+  cmd = "mutmut run"
 
   [tool.poe.tasks.test]
   help = "Test this app"

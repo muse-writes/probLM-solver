@@ -222,9 +222,10 @@ class LLMOutputDataFull:
         with open(fname, encoding='utf-8') as reader:
             data = json.load(reader)
             self.context = data['context']
-            self.hyperparams = Hyperparams(**data.hyperparams)
+            self.hyperparams = Hyperparams(**data['hyperparams'])
             self.response_probabilities = data['response_probabilities']
             self.response_topk = data['response_topk']
             self.sampling_method = data['sampling_method']
             self.branch_sampler = data['branch_sampler']
+        self._written = True
 
