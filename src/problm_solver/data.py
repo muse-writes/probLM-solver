@@ -1,6 +1,7 @@
 """Data container for LLM output."""
 
 import json
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import numpy as np
@@ -163,3 +164,67 @@ class LLMNextTokenData:
             self.output_vec = data['output_vec']
             self.top_m_tokens = data['top_m_tokens']
         self.written = True
+
+
+# Types for easier parsing of LLMOutputDataFull.
+Tokens = list[str]
+TopKProbs = dict[str, float]
+ResponseProbs = dict[str, float]
+TopKResponse = tuple[Tokens, list[TopKProbs]]
+
+
+@dataclass
+class Hyperparams:
+    """An assistant dataclass to `LLMOutputDataFull` with hyperparameter data included."""
+
+    alpha: float
+    top_k: int | None
+    top_p: int | None
+    max_tokens: int
+
+
+@dataclass
+class LLMOutputDataFull:
+    """A fuller dataclass than `LLMOutputData`.
+
+    Includes various parameters as strings, as well as top-k finalised token probabilities.
+
+    :param context: Tokenised context provided to the model.
+    :param hyperparams: Nested dataclass for hyperparameter storage.
+    :param response_probabilities: response tokens and their context-dependent selection
+        probabilities after adjustment.
+    :param response_topk: For each token sampled, supplies the top K tokens and their probabilities.
+    :param sampling_method: User label for sampling method used.
+    :param branch_sampler: User label for branch sampler used, if sampling from the power
+        distribution.
+    """
+
+    context: Tokens
+    hyperparams: Hyperparams
+    response_probabilities: ResponseProbs
+    response_topk: TopKResponse
+    sampling_method: str
+    branch_sampler: str | None
+
+# Unsaved data state tracking variable.
+    _written: bool = field(default=False, repr=False)
+
+    def write(self, fname: str) -> None:
+        """Write data to JSON file."""
+        with open(fname, 'w', encoding='utf-8') as writer:
+            record = asdict(self)
+            record['hyperparams'] = asdict(self.hyperparams)
+            writer.write(json.dumps(record))
+        self._written = True
+
+    def read(self, fname: str) -> None:
+        """Read data from JSON file."""
+        with open(fname, encoding='utf-8') as reader:
+            data = json.load(reader)
+            self.context = data['context']
+            self.hyperparams = Hyperparams(**data.hyperparams)
+            self.response_probabilities = data['response_probabilities']
+            self.response_topk = data['response_topk']
+            self.sampling_method = data['sampling_method']
+            self.branch_sampler = data['branch_sampler']
+

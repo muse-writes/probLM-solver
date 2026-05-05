@@ -583,3 +583,7 @@ class TestLLMTokenDataRoundtrip:
         recovered = LLMTokenData(prompt='', tokens=[], probs=[])
         recovered.read(str(out))
         assert recovered.probs == pytest.approx(sample_token_data.probs)
+
+
+class TestLLMOutputDataFull:
+    """Tests LLMOutputDataFull behaviour."""
