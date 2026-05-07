@@ -7,7 +7,7 @@
 - **Author**: Clio (d.k.johnson@lancaster.ac.uk)
 - **Python Version**: >=3.13, <4.0
 - **Build System**: uv_build
-- **Status**: Version 1.0.0
+- **Status**: Version 1.1.0
 
 ---
 
@@ -18,6 +18,7 @@ probLM-solver/
 │   ├── __init__.py              # Package initialisation (empty docstring)
 │   ├── adjust_probs.py          # GenerationContext, AdjustFn, adjustment functions, BranchSampler hierarchy
 │   ├── cli.py                   # Command line interface
+│   ├── constants.py             # Memory-size constants (KIB, MIB, GIB)
 │   ├── llama_interface.py       # llama.cpp wrapper interface
 │   ├── data.py                  # LLM output data containers and serialisation
 │   ├── utils.py                 # Internal helpers (_as_rng)
@@ -63,6 +64,7 @@ probLM-solver/
   - `prev_probs: list[float]`: History of normalised probabilities of selected tokens so far
   - `context_tokens: list[int]`: Current token ID sequence
   - `query_next: Callable[[list[int]], dict[str, float] | None]`: Pre-bound query for top-M next-token log-probs; returns `None` on EOS
+  - `query_branch: Callable[[list[int], int], float]`: Generates a complete branch of up to `depth` tokens from the given context in a single model call; returns sum of per-token log-probs; returns `0.0` on immediate EOS
   - `tokenize_token: Callable[[str], list[int]]`: Converts a single token string to token ID(s)
 
 **Functions**:
@@ -79,14 +81,14 @@ probLM-solver/
   - `should_continue(branch_log_probs: npt.NDArray[np.float64]) -> bool`: Abstract; returns `True` if more branches should be sampled.
 
 - `MetropolisSampler(BranchSampler)`: Metropolis-Hastings sampler over complete branch proposals.
-  - `__init__(min_branches=5, max_branches=50, tolerance=1e-2, rng=None)`: `rng` is normalised via `_as_rng()` so an int seed or `None` is accepted.
+  - `__init__(equil_branches=5, max_branches=30, tolerance=1e-1, rng=None)`: `rng` is normalised via `_as_rng()` so an int seed or `None` is accepted. `equil_branches` sets the burn-in period discarded before SEM is computed.
   - `reset()`: Clears `self._current_log_prob` to `None`.
   - `step(...)`: Computes `log_accept_ratio = (alpha-1)*(log p' - log p) + log q(x|x') - log q(x'|x)`; accepts with `self._rng.random()`.
-  - `should_continue(branch_log_probs)`: Returns `True` while `n < min_branches`; `False` when `n >= max_branches`; otherwise uses SEM on `branch_log_probs[min_branches:]` (equilibration period discarded) vs `tolerance`.
+  - `should_continue(branch_log_probs)`: Returns `True` while `n < equil_branches`; `False` when `n >= max_branches`; otherwise uses SEM on `branch_log_probs[equil_branches:]` (equilibration period discarded) vs `tolerance`.
 
 - `SamplePowerDist`: Callable class implementing power-distribution sampling via MCMC lookahead.
   - `__init__(alpha, lookahead_depth, branch_sampler: BranchSampler)`: Injects a `BranchSampler` instance.
-  - `__call__(context: GenerationContext) -> dict[str, float]`: For each candidate token, appends its token IDs to the context, then runs `branch_sampler` steps (calling `query_next` at each depth) until `should_continue` returns `False`; accumulates branch log-probs into a numpy array and combines with the candidate's own log-prob scaled by `alpha`.
+  - `__call__(context: GenerationContext) -> dict[str, float]`: For each candidate token, appends its token IDs to the context, then runs `branch_sampler` steps (calling `context.query_branch` once per step) until `should_continue` returns `False`; accumulates branch log-probs into a numpy array and combines with the candidate's own log-prob scaled by `alpha` via log-sum-exp.
 
 **Dependencies**: `abc`, `collections.abc`, `dataclasses`, `numpy`, `problm_solver.utils`, `problm_solver.analysis.probabilities`
 
@@ -102,8 +104,24 @@ probLM-solver/
 
 ---
 
-### 3. **data.py**
+### 3. **constants.py**
+**Purpose**: Package-wide numeric constants.
+
+**Constants**:
+- `KIB = 1024`, `MIB = KIB * KIB`, `GIB = MIB * KIB`: Memory-size multipliers.
+
+**Dependencies**: none
+
+---
+
+### 4. **data.py**
 **Purpose**: Standalone data containers for LLM output; handles serialisation and deserialisation.
+
+**Type Aliases** (used by `LLMOutputDataFull`):
+- `Tokens = list[str]`
+- `TopKProbs = dict[str, float]`
+- `ResponseProbs = tuple[Tokens, list[float]]`: Positionally-aligned pair of chosen token strings and their selection probabilities.
+- `TopKResponse = tuple[Tokens, list[TopKProbs]]`: Positionally-aligned pair of chosen token strings and their full adjusted top-k distributions.
 
 **Key Classes**:
 - `LLMOutputData`: Stores a prompt and its associated LLM responses.
@@ -124,30 +142,45 @@ probLM-solver/
   - `write(fname: str)` / `read(fname: str)`: JSON format with `prompt`, `output_vec`, `top_m_tokens`.
   - `self.written`: Tracks sync with disk.
 
-**Dependencies**: `json`, `numpy`
+- `Hyperparams`: Dataclass storing generation hyperparameters alongside an `LLMOutputDataFull`.
+  - Fields: `alpha: float`, `top_k: int | None`, `top_p: int | None`, `max_tokens: int`.
+
+- `LLMOutputDataFull`: Richer output dataclass returned by `generate_adjusted()`; records the full adjusted generation process.
+  - Fields: `context: Tokens`, `hyperparams: Hyperparams`, `response_probabilities: ResponseProbs`, `response_topk: TopKResponse`, `sampling_method: str`, `branch_sampler: str | None`, `_written: bool` (excluded from serialisation).
+  - `write(fname: str)`: Serialises to single-record JSON via `asdict` with `_dict_factory` to exclude `_written`; sets `_written = True`.
+  - `read(fname: str)`: Deserialises from JSON; explicitly reconstructs `response_probabilities` and `response_topk` as tuples (JSON returns lists); sets `_written = True`.
+  - `_dict_factory(x)`: Static method; excludes `_written` key from `asdict` output.
+
+**Dependencies**: `json`, `dataclasses`, `numpy`
 
 ---
 
-### 4. **llama_interface.py**
+### 5. **llama_interface.py**
 **Purpose**: Wrapper around `llama_cpp` for local model inference. Owns the responsibility of generating all data container types.
 
 **Key Classes**:
 - `ModelInstance`: Keeps a model instance and its context.
-  - `__init__(fname: str, context: str, logits_all: bool = False)`: Loads model via `Llama`; `n_ctx=2048` (hard-coded); `logits_all` forwarded to `Llama`.
+  - `__init__(fname: str, context: str, logits_all: bool = False)`: Loads model via `Llama`; `n_ctx=2048` (hard-coded); `logits_all` forwarded to `Llama`. Computes RAM cache capacity from model metadata (`n_ctx × 2 × n_layers × n_kv_heads × head_dim × 2` × 4 states); attaches a `LlamaRAMCache`.
   - `query() -> str`: Single inference call; `max_tokens=512` (hard-coded); chat completion with `role='user'`.
   - `query_n_times(n: int) -> npt.NDArray[Any]`: Calls `query()` N times.
   - `generate_data(n_samples: int) -> LLMOutputData`.
   - `query_log_probs() -> LLMTokenData`: Chat completion with `logprobs=True, top_logprobs=1`; extracts tokens and `exp(logprob)` probabilities.
   - `query_log_probs_next_token(context_tokens: list[int], n_tokens: int) -> LLMNextTokenData | None`: `create_completion` with `max_tokens=1, logprobs=n_tokens`; returns `None` on EOS (empty `top_logprobs`).
+  - `query_branch(context_tokens: list[int], max_tokens: int) -> float`: Single `create_completion` call with `logprobs=1`; sums `token_logprobs`; returns `0.0` on immediate EOS.
+  - `reset_state() -> None`: Calls `self._llm.reset()`. Low-level API stub.
+  - `eval_tokens(tokens: list[int]) -> None`: Calls `self._llm.eval(tokens)`. Low-level API stub.
+  - `save_live_state() -> LlamaState`: Calls `self._llm.save_state()`. Low-level API stub (see Known Issues).
+  - `load_live_state(state: LlamaState) -> None`: Calls `self._llm.load_state(state)`. Low-level API stub.
   - `get_tokenizer() -> LlamaTokenizer`: Returns a `LlamaTokenizer` backed by `self._llm`.
   - `_format_chat_prompt() -> list[int]`: Builds prompt via `Jinja2ChatFormatter` from `metadata['tokenizer.chat_template']`; tokenises to `list[int]`.
-  - `generate_adjusted(n_tokens: int, adjust_fn: AdjustFn, max_tokens: int) -> LLMOutputData`: Token-by-token loop; builds a `GenerationContext` at each step (with pre-bound `query_next` and `tokenize_token` callables); passes it to `adjust_fn`; records chosen token's normalised probability; breaks on `None`, EOS token ID, or empty token ID list.
+  - `_tokens_as_strings(token_ids: list[int]) -> list[str]`: Converts each token ID to its string representation via `detokenize([tid], special=True)`.
+  - `generate_adjusted(n_tokens: int, adjust_fn: AdjustFn, max_tokens: int, *, alpha: float = 1.0, top_p: int | None = None, sampling_method: str | None = None, branch_sampler: str | None = None) -> LLMOutputDataFull`: Token-by-token loop; builds a `GenerationContext` at each step (with pre-bound `query_next`, `query_branch`, and `tokenize_token` callables); passes it to `adjust_fn`; accumulates chosen tokens, their selection probabilities, and adjusted top-k distributions; casts all floats to Python-native; breaks on `None`, EOS token ID, or empty token ID list; constructs and returns `LLMOutputDataFull`. `sampling_method` is auto-derived from `adjust_fn`'s class name if not supplied.
 
-**Dependencies**: `math`, `llama_cpp`, `llama_cpp.llama_chat_format.Jinja2ChatFormatter`, `numpy`, `problm_solver.adjust_probs`, `problm_solver.data`, `problm_solver.analysis.tokenizer`, `problm_solver.analysis.probabilities`
+**Dependencies**: `copy`, `math`, `inspect`, `llama_cpp`, `llama_cpp.llama_chat_format.Jinja2ChatFormatter`, `numpy`, `problm_solver.adjust_probs`, `problm_solver.data`, `problm_solver.analysis.tokenizer`, `problm_solver.analysis.probabilities`
 
 ---
 
-### 5. **cli.py**
+### 6. **cli.py**
 **Purpose**: Interactive command-line interface for the full generate-and-save workflow.
 
 **Constants**:
@@ -167,21 +200,21 @@ probLM-solver/
 - `ui_save_data(fname: str, data: LLMOutputData)`: Prompts user to confirm; on `'y'` calls `data.write(fname)`; on `'n'` prompts for an alternative filename (empty string intended to discard — see Known Issues).
 - `ui_save_token_data(fname: str, data: LLMTokenData)`: Prompts user to confirm; calls `data.write()`.
 - `ui_get_probs(model, model_path)`: Calls `model.query_log_probs()`; delegates to `ui_save_token_data`.
-- `ui_generate_low_temp(model, model_path)`: Prompts for `alpha`, `top_m`, `max_tokens`; constructs `SampleLowTemp(alpha)`; calls `model.generate_adjusted()`.
-- `ui_generate_power_mcmc(model, model_path)`: Prompts for `alpha`, lookahead depth, `top_m`, `max_tokens`; constructs `SamplePowerDist(alpha, lookahead_depth, MetropolisSampler())`; calls `model.generate_adjusted()`.
+- `ui_generate_low_temp(model, model_path)`: Prompts for `alpha`, `top_k`, `max_tokens`; constructs `SampleLowTemp(alpha)`; calls `model.generate_adjusted()` passing `alpha`; delegates save to `ui_save_data`.
+- `ui_generate_power_mcmc(model, model_path)`: Prompts for `alpha`, lookahead depth, `top_k`, `max_tokens`; constructs `SamplePowerDist(alpha, lookahead_depth, MetropolisSampler(max_branches=10))`; calls `model.generate_adjusted()` passing `alpha`, `sampling_method='Power Distribution'`, `branch_sampler='Metropolis Sampler'`; delegates save to `ui_save_data`.
 - `main()`: Select model → enter prompt → select function → load model (`logits_all=True` for `PROBS`, `LOW_TEMP`, `POWER_SAMPLING`) → dispatch via `match`.
 
 **Dependencies**: `problm_solver.adjust_probs`, `problm_solver.llama_interface`, `problm_solver.data`
 
 ---
 
-### 6. **analysis/\_\_init\_\_.py**
+### 7. **analysis/\_\_init\_\_.py**
 Re-exports the public API of the `analysis` subpackage:
 `Tokenizer`, `WordTokenizer`, `LlamaTokenizer`, `Token`, `TokenSequence`, `prob_of_token`, `sample_from_logprobs`
 
 ---
 
-### 7. **analysis/tokenizer.py**
+### 8. **analysis/tokenizer.py**
 **Purpose**: Tokenizer abstraction and implementations for splitting LLM response strings.
 
 **Type Aliases**: `Token = str`, `TokenSequence = list[Token]`
@@ -196,7 +229,7 @@ Re-exports the public API of the `analysis` subpackage:
 
 ---
 
-### 8. **analysis/probabilities.py**
+### 9. **analysis/probabilities.py**
 **Purpose**: Token probability utility functions.
 
 **Functions**:
@@ -211,7 +244,7 @@ Re-exports the public API of the `analysis` subpackage:
 
 ### Dependency Direction
 ```
-cli.py → ModelInstance (llama_interface.py) → LLMOutputData / LLMTokenData / LLMNextTokenData (data.py)
+cli.py → ModelInstance (llama_interface.py) → LLMOutputData / LLMTokenData / LLMNextTokenData / LLMOutputDataFull / Hyperparams (data.py)
                                              → LlamaTokenizer (analysis/tokenizer.py)
                                              → prob_of_token, sample_from_logprobs (analysis/probabilities.py)
                                              → AdjustFn, GenerationContext (adjust_probs.py)
@@ -223,6 +256,7 @@ analysis/probabilities.py → _as_rng (utils.py)
 analysis/tokenizer.py → (no intra-package deps)
 data.py → (no intra-package deps)
 utils.py → (no intra-package deps)
+constants.py → (no intra-package deps)
 ```
 
 ### Data Flow
@@ -231,8 +265,8 @@ utils.py → (no intra-package deps)
 3. `ModelInstance` is created; `logits_all=True` for functions 2, 3, and 4
 4. **Text responses** (1): `model.generate_data(n)` → `LLMOutputData`; saved to `responses/`
 5. **Token + probability responses** (2): `model.query_log_probs()` → `LLMTokenData`; saved to `probabilities/`
-6. **Low-temperature generation** (3): `model.generate_adjusted(n_tokens, SampleLowTemp(alpha), max_tokens)` → `LLMOutputData`; saved to `responses/`
-7. **Power MCMC generation** (4): `model.generate_adjusted(n_tokens, SamplePowerDist(alpha, depth, MetropolisSampler()), max_tokens)` → `LLMOutputData`; saved to `responses/`
+6. **Low-temperature generation** (3): `model.generate_adjusted(n_tokens, SampleLowTemp(alpha), max_tokens, alpha=alpha)` → `LLMOutputDataFull`; saved to `responses/`
+7. **Power MCMC generation** (4): `model.generate_adjusted(n_tokens, SamplePowerDist(alpha, depth, MetropolisSampler()), max_tokens, alpha=alpha, sampling_method=..., branch_sampler=...)` → `LLMOutputDataFull`; saved to `responses/`
 
 ---
 
@@ -289,12 +323,15 @@ poe docs --serve    # Open built docs in browser (xdg-open docs/_build/html/inde
 - **Options**: Exit on first failure, verbose (v=2), JUnit XML reports
 - **Paths**: `src/`, `tests/`
 - **Test files**: `test_import.py`, `test_data.py`, `test_cli.py`, `test_llama_interface.py`, `test_probabilities.py`, `test_adjust_probs.py`
+- **Total tests**: 210
 - **Doctests**: `WordTokenizer` and `LlamaTokenizer` have inline doctests collected by `--doctest-modules`
 - **Mocking**:
-  - `llama_cpp.Llama` is patched at construction time in all `ModelInstance` tests
+  - `llama_cpp.Llama` is patched at construction time in all `ModelInstance` tests; `_make_llama_mock` provides metadata and `n_ctx` so `__init__`'s cache-sizing logic runs correctly
+  - `llama_cpp.LlamaRAMCache` is patched in `test_cache_sized_from_model_metadata`
   - `Jinja2ChatFormatter` is patched at `problm_solver.llama_interface.Jinja2ChatFormatter` in `TestFormatChatPrompt`
   - `_format_chat_prompt`, `query_log_probs_next_token`, `sample_from_logprobs`, and `prob_of_token` are all patched in the `gen_adj_model` fixture via `contextlib.ExitStack`
   - `adjust_fn` receives a `GenerationContext`; `MagicMock.call_args_list` inspection reads `.prev_probs` from the context object
+  - `GenerationContext` fixtures in `test_adjust_probs.py` supply a `query_branch=MagicMock(return_value=-1.5)` field
   - CLI filesystem interactions use `monkeypatch` against `tmp_path`
 
 ### Linting (Ruff)
@@ -306,7 +343,7 @@ poe docs --serve    # Open built docs in browser (xdg-open docs/_build/html/inde
 
 ### Versioning
 - Conventional Commits enforced via Commitizen
-- Current version: **1.0.0**
+- Current version: **1.1.0**
 
 ---
 
@@ -320,11 +357,17 @@ poe docs --serve    # Open built docs in browser (xdg-open docs/_build/html/inde
 
 4. **`FBT001` on `_LlamaInterface` protocol** (`analysis/tokenizer.py`): `add_bos: bool` and `special: bool` are flagged as boolean positional arguments. These mirror the external `llama_cpp.Llama` API and cannot be made keyword-only.
 
-5. **Equilibration period not user-configurable** (`adjust_probs.py`): `should_continue()` discards `branch_log_probs[:min_branches]` as a fixed equilibration period. Whether this is the right threshold, and whether users should be able to control it separately from `min_branches`, is an open design question (TODO in source).
+5. **Equilibration period not user-configurable** (`adjust_probs.py`): `should_continue()` discards `branch_log_probs[:equil_branches]` as a fixed equilibration period. Whether this is the right threshold, and whether users should be able to control it separately from `equil_branches`, is an open design question (TODO in source).
 
-6. **Lookahead is sequential** (`adjust_probs.py`): The branch generation loop calls `query_next` one token at a time. A TODO notes this should eventually be replaced with a parallelised implementation that calculates all branch tokens at once.
+6. **`save_live_state()` missing return** (`llama_interface.py`): calls `self._llm.save_state()` but does not return its result; annotated `-> LlamaState` but always returns `None`.
 
-7. **`generate_adjusted()` returns `LLMOutputData`**: Does not record the adjusted conditional distributions at each step; post-hoc analysis of the adjustment process is not possible with the current return type.
+7. **`top_p` stubbed** (`llama_interface.py`): `top_p` keyword argument accepted by `generate_adjusted()` but raises `NotImplementedError` if passed any non-`None` value.
+
+8. **`ui_generate_low_temp` missing `sampling_method`** (`cli.py`): does not pass `sampling_method` to `generate_adjusted()`; the label stored in `LLMOutputDataFull` is auto-derived as `'SampleLowTemp'` rather than a clean human-readable string.
+
+9. **`get_adjusted_path()` extension** (`cli.py`): returns a `.jsonl` path, but `LLMOutputDataFull.write()` produces single-record JSON; should be `.json`.
+
+10. **`_written` comment indentation** (`data.py`): the inline comment `# Unsaved data state tracking variable.` before `_written` is at column 0 inside the `LLMOutputDataFull` class body; should be indented 4 spaces.
 
 ---
 
@@ -374,7 +417,20 @@ poe docs --serve    # Open built docs in browser (xdg-open docs/_build/html/inde
 - ✓ `SamplePowerDist` implemented in `adjust_probs.py`
 - ✓ `generate_adjusted()` updated to build and inject `GenerationContext` at each step
 - ✓ `_as_rng()` helper added in new `utils.py`; legacy global RNG eliminated from `MetropolisSampler` and `sample_from_logprobs`
-- ✓ SEM equilibration bug fixed in `MetropolisSampler.should_continue`: warmup samples now discarded via `branch_log_probs[min_branches:]`
+- ✓ SEM equilibration bug fixed in `MetropolisSampler.should_continue`: warmup samples now discarded via `branch_log_probs[equil_branches:]`
 - ✓ `ui_generate_power_mcmc()` added to `cli.py`; `POWER_SAMPLING = 4` constant added; `main()` dispatch updated
 - ✓ `ui_generate_adjusted()` renamed to `ui_generate_low_temp()`; `GENERATE_ADJUSTED` renamed to `LOW_TEMP`
 - ✓ Sphinx reference docs added: `docs/Makefile`, `docs/conf.py`, `docs/index.rst`, `docs/api.rst`; `sphinx`, `sphinx-autodoc-typehints`, `shibuya` added to dev dependencies; `poe docs` task migrated from MkDocs to Sphinx
+- ✓ `ModelInstance.__init__` now computes RAM cache capacity from model metadata; `LlamaRAMCache` created and attached
+- ✓ `ModelInstance.query_branch()` added: single-call branch log-prob evaluation replacing token-by-token `query_next` loop in `SamplePowerDist`
+- ✓ Low-level API stubs added to `ModelInstance`: `reset_state()`, `eval_tokens()`, `save_live_state()`, `load_live_state()`
+- ✓ `GenerationContext.query_branch` field added; `SamplePowerDist.__call__` updated to call it instead of looping over `query_next`
+- ✓ `MetropolisSampler` parameter renamed `min_branches` → `equil_branches`; `max_branches` default reduced 50 → 30
+- ✓ `Hyperparams` and `LLMOutputDataFull` dataclasses added to `data.py`; `ResponseProbs` type changed from `dict[str, float]` to `tuple[Tokens, list[float]]` to preserve duplicate token positions
+- ✓ `LLMOutputDataFull.read()` tuple reconstruction fixed: `response_probabilities` and `response_topk` now explicitly rebuilt as tuples after JSON deserialisation (was left as lists)
+- ✓ `generate_adjusted()` return type changed from `LLMOutputData` to `LLMOutputDataFull`; new keyword-only params `alpha`, `top_p`, `sampling_method`, `branch_sampler` added
+- ✓ `numpy` float serialisation bug fixed: `adjusted` dict values and `prob_of_token` results cast to `float()` at accumulation time in `generate_adjusted()`
+- ✓ `AttributeError` on `adjust_fn.__name__` fixed: callable class instances handled via `isclass`/`getattr`/`type()` fallback
+- ✓ `constants.py` added with `KIB`, `MIB`, `GIB`
+- ✓ `_make_llama_mock` updated with model metadata and `n_ctx`; `test_cache_sized_from_model_metadata` added; `TestModelInstanceQueryBranch` test class added
+- ✓ `test_adjust_probs.py` updated: `query_branch` added to all `GenerationContext` fixtures; `SamplePowerDist` tests rewritten around `query_branch`; `MetropolisSampler` tests updated to `equil_branches`
