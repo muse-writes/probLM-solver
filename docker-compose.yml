@@ -3,6 +3,7 @@ services:
   devcontainer:
     build:
       target: dev
+      context: .
     volumes:
       - ..:/workspaces
       - command-history-volume:/home/user/.history/
@@ -13,6 +14,7 @@ services:
   app:
     build:
       target: app
+      context: .
     profiles:
       - app
     stdin_open: true
