@@ -169,7 +169,7 @@ class LLMNextTokenData:
 # Types for easier parsing of LLMOutputDataFull.
 Tokens = list[str]
 TopKProbs = dict[str, float]
-ResponseProbs = dict[str, float]
+ResponseProbs = tuple[Tokens, list[float]]
 TopKResponse = tuple[Tokens, list[TopKProbs]]
 
 
@@ -212,7 +212,7 @@ class LLMOutputDataFull:
     def write(self, fname: str) -> None:
         """Write data to JSON file."""
         with open(fname, 'w', encoding='utf-8') as writer:
-            record = asdict(self)
+            record = asdict(self, dict_factory=self._dict_factory)
             record['hyperparams'] = asdict(self.hyperparams)
             writer.write(json.dumps(record))
         self._written = True
@@ -223,9 +223,22 @@ class LLMOutputDataFull:
             data = json.load(reader)
             self.context = data['context']
             self.hyperparams = Hyperparams(**data['hyperparams'])
-            self.response_probabilities = data['response_probabilities']
-            self.response_topk = data['response_topk']
+            self.response_probabilities = (
+                data['response_probabilities'][0],
+                data['response_probabilities'][1],
+            )
+            self.response_topk = (
+                data['response_topk'][0],
+                data['response_topk'][1],
+            )
             self.sampling_method = data['sampling_method']
             self.branch_sampler = data['branch_sampler']
         self._written = True
+
+
+    @staticmethod
+    def _dict_factory(x: 'LLMOutputDataFull') -> dict:
+        """Create dict but exclude state variables."""
+        exclude = ('_written', )
+        return {k: v for (k, v) in x if k not in exclude}
 

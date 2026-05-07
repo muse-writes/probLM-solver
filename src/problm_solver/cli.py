@@ -166,11 +166,16 @@ def ui_generate_low_temp(model: ModelInstance, model_path: Path) -> None:
     print('\nGenerating output from low-temp sampling.')
     alpha = float(input('Please input the value of alpha, as a float: '))
     sampling_fn = SampleLowTemp(alpha=alpha)
-    top_m = int(input(
+    top_k = int(input(
         'Please input the number of most probable token candidates (M) to consider at each step: '
     ))
     max_tokens = int(input('Please input the maximum number of response tokens: '))
-    data = model.generate_adjusted(n_tokens=top_m, adjust_fn=sampling_fn, max_tokens=max_tokens)
+    data = model.generate_adjusted(
+        n_tokens=top_k,
+        adjust_fn=sampling_fn,
+        max_tokens=max_tokens,
+        alpha=alpha
+    )
 
 # Handle saving data
     response_path = get_adjusted_path(model_path)
@@ -187,7 +192,7 @@ def ui_generate_power_mcmc(model: ModelInstance, model_path: Path) -> None:
         'Please input the max lookahead depth to generate branches over, '
         'as an integer: '
     ))
-    top_m = int(input(
+    top_k = int(input(
         'Please input the number of most probable token candidates (M) to consider at each step: '
     ))
     max_tokens = int(input('Please input the maximum number of response tokens: '))
@@ -196,9 +201,16 @@ def ui_generate_power_mcmc(model: ModelInstance, model_path: Path) -> None:
     sampling_fn = SamplePowerDist(
         alpha=alpha,
         lookahead_depth=peek,
-        branch_sampler=MetropolisSampler()
+        branch_sampler=MetropolisSampler(max_branches=10)
     )
-    data = model.generate_adjusted(n_tokens=top_m, adjust_fn=sampling_fn, max_tokens=max_tokens)
+    data = model.generate_adjusted(
+        n_tokens=top_k,
+        adjust_fn=sampling_fn,
+        max_tokens=max_tokens,
+        alpha=alpha,
+        sampling_method='Power Distribution',
+        branch_sampler='Metropolis Sampler',
+    )
 
 # Handle saving data.
     response_path = get_adjusted_path(model_path)

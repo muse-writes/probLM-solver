@@ -1,6 +1,8 @@
 """llama.cpp python interface for running local models."""
 
+import copy
 import math
+from inspect import isclass
 from typing import Any
 
 import numpy as np
@@ -11,7 +13,13 @@ from llama_cpp.llama_chat_format import Jinja2ChatFormatter
 from problm_solver.adjust_probs import AdjustFn, GenerationContext
 from problm_solver.analysis.probabilities import prob_of_token, sample_from_logprobs
 from problm_solver.analysis.tokenizer import LlamaTokenizer, TokenSequence
-from problm_solver.data import LLMNextTokenData, LLMOutputData, LLMTokenData
+from problm_solver.data import (
+    Hyperparams,
+    LLMNextTokenData,
+    LLMOutputData,
+    LLMOutputDataFull,
+    LLMTokenData,
+)
 
 
 class ModelInstance:
@@ -221,6 +229,15 @@ class ModelInstance:
             special=True,
         )
 
+
+    def _tokens_as_strings(self, token_ids: list[int]) -> list[str]:
+        """Use repeated calls to Llama.detokenize to return a list of token strings."""
+        return [
+            self._llm.detokenize([tid], special=True).decode('utf-8', errors='replace')
+            for tid in token_ids
+        ]
+
+
 ## -- Adjusting probabilities -- ##
 
     def generate_adjusted(
@@ -228,7 +245,12 @@ class ModelInstance:
         n_tokens: int,
         adjust_fn: AdjustFn,
         max_tokens: int,
-    ) -> LLMOutputData:
+        *,
+        alpha: float = 1.0,
+        top_p: int | None = None, # Stub, kinda. Big TODO(Clio).
+        sampling_method: str | None = None,
+        branch_sampler: str | None = None,
+    ) -> LLMOutputDataFull:
         """Generate a response token-by-token with adjusted next-token probabilities.
 
         At each step the top ``n_tokens`` candidate next tokens are retrieved
@@ -245,10 +267,23 @@ class ModelInstance:
         :returns: ``LLMOutputData`` containing the prompt and the generated
             response string.
         """
+# Hyperparam setup.
+        if sampling_method is None:
+            if isclass(adjust_fn):
+                sampling_method = adjust_fn.__class__.__name__
+            else:
+                sampling_method = getattr(adjust_fn, '__name__', type(adjust_fn).__name__)
+        if top_p is not None:
+            raise NotImplementedError
+
+
+# Main loop setup.
         context = self._format_chat_prompt()
-        prompt_length = len(context)
         eos_id = self._llm.token_eos()
         prev_probs: list[float] = []
+        response_prob_tokens: list[str] = []
+        response_prob_values: list[float] = []
+        response_topk_dists: list[dict[str, float]] = []
 
         for _ in range(max_tokens):
             next_token_data = self.query_log_probs_next_token(context, n_tokens)
@@ -273,11 +308,30 @@ class ModelInstance:
             token_ids = self._llm.tokenize(
                 token_str.encode('utf-8'), add_bos=False, special=False,
             )
+
+# Check for end.
             if not token_ids or eos_id in token_ids:
                 break
-            prev_probs.append(prob_of_token(token_str, adjusted))
+
+# Assign various data variables for safekeeping.
+            token_prob = float(prob_of_token(token_str, adjusted))
+            prev_probs.append(token_prob)
+            response_prob_tokens.append(token_str)
+            response_prob_values.append(token_prob)
+            response_topk_dists.append({k: float(v) for k, v in adjusted.items()})
             context.extend(token_ids)
 
-        generated_ids = context[prompt_length:]
-        response = self._llm.detokenize(generated_ids).decode('utf-8', errors='replace')
-        return LLMOutputData(prompt=self.context, data=np.array([response], dtype=str))
+# Construct dataclass output.
+        return LLMOutputDataFull(
+            context=self._tokens_as_strings(context),
+            hyperparams=Hyperparams(
+                alpha=alpha,
+                top_k=n_tokens,
+                top_p=top_p,
+                max_tokens=max_tokens,
+            ),
+            response_probabilities=(response_prob_tokens, response_prob_values),
+            response_topk=(copy.copy(response_prob_tokens), response_topk_dists),
+            sampling_method=sampling_method,
+            branch_sampler=branch_sampler
+        )

@@ -449,7 +449,7 @@ def sample_full_data(sample_hyperparams):
     return LLMOutputDataFull(
         context=['Hello', ',', ' world'],
         hyperparams=sample_hyperparams,
-        response_probabilities={' Hello': 0.7, ' world': 0.3},
+        response_probabilities=([' Hello', ' world'], [0.7, 0.3]),
         response_topk=(
             ['Hello', 'world'],
             [{' Hello': -0.3, ' Hi': -1.2}, {' world': -0.5, ' there': -0.8}],
@@ -504,7 +504,7 @@ class TestLLMOutputDataFullRead:
             tmp_path,
             context=['Hi', '!'],
             hyperparams_dict={'alpha': 0.5, 'top_k': 5, 'top_p': None, 'max_tokens': 20},
-            response_probabilities={' Hi': 0.8, ' Hello': 0.2},
+            response_probabilities=([' Hi', ' Hello'], [0.8, 0.2]),
             response_topk=[
                 ['Hi', 'Hello'],
                 [{' Hi': -0.2, ' Hey': -0.9}, {' Hello': -0.5, ' World': -1.1}],
@@ -520,7 +520,7 @@ class TestLLMOutputDataFullRead:
         return LLMOutputDataFull(
             context=[],
             hyperparams=Hyperparams(alpha=0.0, top_k=None, top_p=None, max_tokens=0),
-            response_probabilities={},
+            response_probabilities=([], []),
             response_topk=([], []),
             sampling_method='',
             branch_sampler=None,
@@ -543,7 +543,7 @@ class TestLLMOutputDataFullRoundtrip:
         return LLMOutputDataFull(
             context=[],
             hyperparams=Hyperparams(alpha=0.0, top_k=None, top_p=None, max_tokens=0),
-            response_probabilities={},
+            response_probabilities=([], []),
             response_topk=([], []),
             sampling_method='',
             branch_sampler=None,

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from problm_solver.data import LLMNextTokenData, LLMOutputData
+from problm_solver.data import LLMNextTokenData, LLMOutputData, LLMOutputDataFull
 
 
 def _make_llama_mock(response_text: str = 'Mock response.') -> MagicMock:
@@ -477,20 +477,21 @@ def gen_adj_model(model_instance):
 class TestGenerateAdjusted:
     """Tests for ModelInstance.generate_adjusted."""
 
-    def test_returns_llmoutputdata(self, gen_adj_model) -> None:
-        """generate_adjusted() returns an LLMOutputData instance."""
+    def test_returns_llmoutputdatafull(self, gen_adj_model) -> None:
+        """generate_adjusted() returns an LLMOutputDataFull instance."""
         result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
-        assert isinstance(result, LLMOutputData)
+        assert isinstance(result, LLMOutputDataFull)
 
-    def test_prompt_matches_context(self, gen_adj_model) -> None:
-        """The prompt on the returned LLMOutputData matches the model's context."""
+    def test_context_is_list_of_strings(self, gen_adj_model) -> None:
+        """context on the returned LLMOutputDataFull is a list of strings."""
         result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
-        assert result.prompt == gen_adj_model.context
+        assert isinstance(result.context, list)
+        assert all(isinstance(s, str) for s in result.context)
 
     def test_written_flag_is_false(self, gen_adj_model) -> None:
-        """Freshly generated data has written=False."""
+        """Freshly generated data has _written=False."""
         result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
-        assert result.written is False
+        assert result._written is False
 
     def test_loops_exactly_max_tokens_times(self, gen_adj_model) -> None:
         """query_log_probs_next_token is called exactly max_tokens times when EOS never appears."""
@@ -526,10 +527,10 @@ class TestGenerateAdjusted:
         assert adjust_fn.call_args_list[1][0][0].prev_probs == [0.8]
         assert adjust_fn.call_args_list[2][0][0].prev_probs == [0.8, 0.8]
 
-    def test_response_decoded_from_detokenize(self, gen_adj_model) -> None:
-        """The response string in the result comes from decoding the generated token IDs."""
+    def test_response_topk_tokens_are_sampled_tokens(self, gen_adj_model) -> None:
+        """response_topk[0] contains the token strings chosen at each step."""
         result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=2)
-        assert result.data[0] == ' hello world'
+        assert result.response_topk[0] == [' hello', ' hello']
 
     def test_stops_when_query_returns_none(self, gen_adj_model) -> None:
         """The loop breaks immediately when query_log_probs_next_token returns None."""
