@@ -122,7 +122,7 @@ class LLMNextTokenData:
         self,
         prompt: str,
         output_vec: list[int],
-        top_m_tokens: dict[str, float],
+        top_k_tokens: dict[str, float],
     ) -> None:
         """Initialize context and next token data.
 
@@ -134,7 +134,7 @@ class LLMNextTokenData:
         """
         self.prompt = prompt
         self.output_vec = output_vec
-        self.top_m_tokens = top_m_tokens
+        self.top_k_tokens = top_k_tokens
         self.written = False
 
 
@@ -147,7 +147,7 @@ class LLMNextTokenData:
             record = {
                 'prompt': self.prompt,
                 'output_vec': self.output_vec,
-                'top_m_tokens': self.top_m_tokens,
+                'top_k_tokens': self.top_k_tokens,
             }
             writer.write(json.dumps(record))
         self.written = True
@@ -162,7 +162,7 @@ class LLMNextTokenData:
             data = json.load(reader)
             self.prompt = data['prompt']
             self.output_vec = data['output_vec']
-            self.top_m_tokens = data['top_m_tokens']
+            self.top_k_tokens = data['top_k_tokens']
         self.written = True
 
 

@@ -117,31 +117,31 @@ class ModelInstance:
         self,
         context_tokens: list[int],
         n_tokens: int,
-    ) -> LLMNextTokenData | None:
-        """Query next M most likely tokens in current context.
+    ) -> LLMNextTokenData:
+        """Return the top-M most likely next tokens and their log-probabilities.
 
-        Query the model for a single token, output the top M most likely tokens
-        and their logarithmic probabilities. Returns ``None`` when the model
-        generates an EOS token, indicated by an empty ``top_logprobs`` list in
-        the response (llama_cpp does not include EOS in logprob output).
+        Resets the model state, evaluates ``context_tokens`` in a single
+        forward pass, applies log-softmax to the last-position logits, and
+        returns the top ``n_tokens`` candidates via :meth:`_top_k_from_logprobs`.
+
+        EOS detection is the caller's responsibility: the EOS token will
+        appear naturally in the returned distribution when the model prefers
+        it, and :meth:`generate_adjusted` stops the loop after the EOS token
+        ID is sampled.
 
         :param context_tokens: The current context as a list of integer token IDs.
-        :param n_tokens: Number of top candidate tokens (M) to return.
-        :returns: ``LLMNextTokenData`` containing the top-M token → log-prob
-            mapping, or ``None`` if EOS was generated.
+        :param n_tokens: Number of top candidate tokens to return.
+        :returns: ``LLMNextTokenData`` containing the top-K token → log-prob
+            mapping.
         """
-        output = self._llm.create_completion(
-                context_tokens,
-                max_tokens=1,
-                logprobs=n_tokens,
-        )
-        top_logprobs_list: list = output['choices'][0]['logprobs']['top_logprobs']
-        if not top_logprobs_list:
-            return None
+        self._llm.reset()
+        self._llm.eval(context_tokens)
+        logprobs = self._log_softmax(self._llm.scores[-1]) # shape: (n_vocab,)
+        top_k = self._top_k_from_logprobs(logprobs, n_tokens)
         return LLMNextTokenData(
             prompt=self.context,
             output_vec=context_tokens,
-            top_m_tokens=top_logprobs_list[0]
+            top_k_tokens=top_k
         )
 
 
@@ -339,16 +339,12 @@ class ModelInstance:
 
         for _ in range(max_tokens):
             next_token_data = self.query_log_probs_next_token(context, n_tokens)
-            if next_token_data is None:
-                break
             ctx = GenerationContext(
-                token_probs=next_token_data.top_m_tokens,
+                token_probs=next_token_data.top_k_tokens,
                 prev_probs=list(prev_probs),
                 context_tokens=list(context),
                 query_next=lambda ctx_ids: (
-                    r.top_m_tokens
-                    if (r := self.query_log_probs_next_token(ctx_ids, n_tokens)) is not None
-                    else None
+                    self.query_log_probs_next_token(ctx_ids, n_tokens).top_k_tokens
                 ),
                 query_branch=lambda ctx_ids, depth: self.query_branch(ctx_ids, depth),
                 tokenize_token=lambda s: self._llm.tokenize(

@@ -318,24 +318,26 @@ class TestQueryLogProbsNextToken:
 
     @pytest.fixture()
     def next_token_model(self, model_instance):
-        """Configure the mock LLM to return a next-token completion response."""
-        model_instance._llm.create_completion.return_value = _make_next_token_completion(
-            {' Four': -0.5, ' four': -1.2}
+        """Configure mock LLM for query_log_probs_next_token.
+
+        scores[-1] contains known logits over a 5-token vocab:
+        token 1 highest (3.0), token 3 second (2.0), rest lower.
+        detokenize returns '<tokN>' for token ID N.
+        """
+        vocab_size = 5
+        scores = np.zeros((2048, vocab_size), dtype=np.float32)
+        scores[-1] = [0.0, 3.0, 1.0, 2.0, 0.5]
+        model_instance._llm.scores = scores
+        model_instance._llm.detokenize.side_effect = (
+            lambda ids, special=False: f'<tok{ids[0]}>'.encode()
         )
         return model_instance
 
-    def test_returns_none_when_top_logprobs_empty(self, next_token_model) -> None:
-        """Returns None when top_logprobs is empty, indicating EOS was generated."""
-        next_token_model._llm.create_completion.return_value = {
-            'choices': [{'logprobs': {'top_logprobs': []}, 'finish_reason': 'stop'}]
-        }
-        result = next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=2)
-        assert result is None
-
-    def test_returns_llmnexttokendata(self, next_token_model) -> None:
-        """query_log_probs_next_token() returns an LLMNextTokenData instance."""
+    def test_always_returns_llmnexttokendata(self, next_token_model) -> None:
+        """query_log_probs_next_token() always returns LLMNextTokenData, never None."""
         result = next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=2)
         assert isinstance(result, LLMNextTokenData)
+        assert result is not None
 
     def test_output_vec_is_passed_context(self, next_token_model) -> None:
         """output_vec on the result is the context list that was passed in."""
@@ -343,33 +345,27 @@ class TestQueryLogProbsNextToken:
         result = next_token_model.query_log_probs_next_token(context, n_tokens=2)
         assert result.output_vec == context
 
-    def test_top_m_tokens_extracted_correctly(self, next_token_model) -> None:
-        """top_m_tokens contains the dict returned by the API's top_logprobs."""
+    def test_top_k_tokens_contains_highest_scoring_tokens(self, next_token_model) -> None:
+        """top_k_tokens contains the n tokens with the highest logits."""
         result = next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=2)
-        assert result.top_m_tokens == {' Four': -0.5, ' four': -1.2}
+        assert '<tok1>' in result.top_k_tokens
+        assert '<tok3>' in result.top_k_tokens
 
-    def test_passes_max_tokens_one(self, next_token_model) -> None:
-        """create_completion is called with max_tokens=1 to get a single next token."""
+    def test_top_k_tokens_has_n_entries(self, next_token_model) -> None:
+        """top_k_tokens contains exactly n_tokens entries."""
+        result = next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=3)
+        assert len(result.top_k_tokens) == 3
+
+    def test_calls_reset(self, next_token_model) -> None:
+        """reset() is called once to clear stale KV-cache state."""
         next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=2)
-        _, kwargs = next_token_model._llm.create_completion.call_args
-        assert kwargs.get('max_tokens') == 1
+        next_token_model._llm.reset.assert_called_once()
 
-    def test_passes_logprobs_as_n_tokens(self, next_token_model) -> None:
-        """create_completion is called with logprobs set to n_tokens.
-
-        create_completion takes logprobs as Optional[int] (the number of top
-        log-probabilities to return), not a boolean as in create_chat_completion.
-        """
-        next_token_model.query_log_probs_next_token([1, 2, 3], n_tokens=5)
-        _, kwargs = next_token_model._llm.create_completion.call_args
-        assert kwargs.get('logprobs') == 5
-
-    def test_passes_context_as_prompt(self, next_token_model) -> None:
-        """create_completion receives the context list as its positional prompt argument."""
+    def test_calls_eval_with_context_tokens(self, next_token_model) -> None:
+        """eval() is called with the full context token list."""
         context = [10, 20, 30]
         next_token_model.query_log_probs_next_token(context, n_tokens=2)
-        args, _ = next_token_model._llm.create_completion.call_args
-        assert args[0] == context
+        next_token_model._llm.eval.assert_called_once_with(context)
 
 
 class TestFormatChatPrompt:
@@ -581,7 +577,7 @@ def gen_adj_model(model_instance):
     next_token_data = LLMNextTokenData(
         prompt=model_instance.context,
         output_vec=[10, 20, 30],
-        top_m_tokens={' hello': -0.5, ' world': -1.2},
+        top_k_tokens={' hello': -0.5, ' world': -1.2},
     )
     model_instance._llm.token_eos.return_value = 0
     model_instance._llm.tokenize.return_value = [42]
@@ -628,13 +624,13 @@ class TestGenerateAdjusted:
         assert gen_adj_model.query_log_probs_next_token.call_count == 4
 
     def test_adjust_fn_called_each_step(self, gen_adj_model) -> None:
-        """adjust_fn is called once per generated token with the top_m_tokens dict."""
+        """adjust_fn is called once per generated token."""
         adjust_fn = MagicMock(return_value={' hello': -0.5})
         gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=3)
         assert adjust_fn.call_count == 3
 
-    def test_adjust_fn_receives_top_m_tokens(self, gen_adj_model) -> None:
-        """adjust_fn receives a GenerationContext whose token_probs is the top_m_tokens dict."""
+    def test_adjust_fn_receives_top_k_tokens(self, gen_adj_model) -> None:
+        """adjust_fn receives a GenerationContext whose token_probs is the top_k_tokens dict."""
         adjust_fn = MagicMock(return_value={' hello': -0.5})
         gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=1)
         ctx = adjust_fn.call_args[0][0]
@@ -660,12 +656,6 @@ class TestGenerateAdjusted:
         """response_topk[0] contains the token strings chosen at each step."""
         result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=2)
         assert result.response_topk[0] == [' hello', ' hello']
-
-    def test_stops_when_query_returns_none(self, gen_adj_model) -> None:
-        """The loop breaks immediately when query_log_probs_next_token returns None."""
-        gen_adj_model.query_log_probs_next_token.return_value = None
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=10)
-        assert gen_adj_model.query_log_probs_next_token.call_count == 1
 
     def test_stops_early_on_eos_token(self, gen_adj_model) -> None:
         """The loop breaks before max_tokens when tokenize returns the EOS token ID."""

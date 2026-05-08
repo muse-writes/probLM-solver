@@ -273,7 +273,7 @@ def sample_next_token_data():
     return LLMNextTokenData(
         prompt='What is 2+2?',
         output_vec=[1, 2, 3],
-        top_m_tokens={' Four': -0.5, ' four': -1.2, ' 4': -1.8},
+        top_k_tokens={' Four': -0.5, ' four': -1.2, ' 4': -1.8},
     )
 
 
@@ -304,22 +304,22 @@ class TestLLMNextTokenDataWrite:
         sample_next_token_data.write(str(out))
         assert json.loads(out.read_text(encoding='utf-8'))['output_vec'] == sample_next_token_data.output_vec
 
-    def test_top_m_tokens_matches(self, sample_next_token_data, tmp_path) -> None:
-        """The top_m_tokens dict written to disk matches the in-memory value."""
+    def test_top_k_tokens_matches(self, sample_next_token_data, tmp_path) -> None:
+        """The top_k_tokens dict written to disk matches the in-memory value."""
         out = tmp_path / 'output.json'
         sample_next_token_data.write(str(out))
         record = json.loads(out.read_text(encoding='utf-8'))
-        assert record['top_m_tokens'] == pytest.approx(sample_next_token_data.top_m_tokens)
+        assert record['top_k_tokens'] == pytest.approx(sample_next_token_data.top_k_tokens)
 
 
 class TestLLMNextTokenDataRead:
     """Tests for LLMNextTokenData.read."""
 
-    def _make_json(self, tmp_path, prompt, output_vec, top_m_tokens) -> str:
+    def _make_json(self, tmp_path, prompt, output_vec, top_k_tokens) -> str:
         """Write a JSON fixture file and return its path string."""
         out = tmp_path / 'fixture.json'
         out.write_text(
-            json.dumps({'prompt': prompt, 'output_vec': output_vec, 'top_m_tokens': top_m_tokens}),
+            json.dumps({'prompt': prompt, 'output_vec': output_vec, 'top_k_tokens': top_k_tokens}),
             encoding='utf-8',
         )
         return str(out)
@@ -329,7 +329,7 @@ class TestLLMNextTokenDataRead:
         from problm_solver.data import LLMNextTokenData
 
         path = self._make_json(tmp_path, 'Hello?', [1, 2], {' hi': -0.3})
-        obj = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        obj = LLMNextTokenData(prompt='', output_vec=[], top_k_tokens={})
         obj.read(path)
         assert obj.prompt == 'Hello?'
 
@@ -338,25 +338,25 @@ class TestLLMNextTokenDataRead:
         from problm_solver.data import LLMNextTokenData
 
         path = self._make_json(tmp_path, 'Q?', [10, 20, 30], {' a': -0.5})
-        obj = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        obj = LLMNextTokenData(prompt='', output_vec=[], top_k_tokens={})
         obj.read(path)
         assert obj.output_vec == [10, 20, 30]
 
-    def test_populates_top_m_tokens(self, tmp_path) -> None:
-        """read() sets self.top_m_tokens from the file contents."""
+    def test_populates_top_k_tokens(self, tmp_path) -> None:
+        """read() sets self.top_k_tokens from the file contents."""
         from problm_solver.data import LLMNextTokenData
 
         path = self._make_json(tmp_path, 'Q?', [1], {' yes': -0.1, ' no': -2.3})
-        obj = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        obj = LLMNextTokenData(prompt='', output_vec=[], top_k_tokens={})
         obj.read(path)
-        assert obj.top_m_tokens == pytest.approx({' yes': -0.1, ' no': -2.3})
+        assert obj.top_k_tokens == pytest.approx({' yes': -0.1, ' no': -2.3})
 
     def test_sets_written_flag(self, tmp_path) -> None:
         """read() sets written to True — the object is now in sync with disk."""
         from problm_solver.data import LLMNextTokenData
 
         path = self._make_json(tmp_path, 'Q?', [1, 2], {' a': -0.5})
-        obj = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        obj = LLMNextTokenData(prompt='', output_vec=[], top_k_tokens={})
         obj.read(path)
         assert obj.written is True
 
@@ -370,7 +370,7 @@ class TestLLMNextTokenDataRoundtrip:
 
         out = tmp_path / 'round.json'
         sample_next_token_data.write(str(out))
-        recovered = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        recovered = LLMNextTokenData(prompt='', output_vec=[], top_k_tokens={})
         recovered.read(str(out))
         assert recovered.prompt == sample_next_token_data.prompt
 
@@ -380,19 +380,19 @@ class TestLLMNextTokenDataRoundtrip:
 
         out = tmp_path / 'round.json'
         sample_next_token_data.write(str(out))
-        recovered = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        recovered = LLMNextTokenData(prompt='', output_vec=[], top_k_tokens={})
         recovered.read(str(out))
         assert recovered.output_vec == sample_next_token_data.output_vec
 
-    def test_roundtrip_preserves_top_m_tokens(self, sample_next_token_data, tmp_path) -> None:
-        """A write-then-read cycle preserves top_m_tokens exactly."""
+    def test_roundtrip_preserves_top_k_tokens(self, sample_next_token_data, tmp_path) -> None:
+        """A write-then-read cycle preserves top_k_tokens exactly."""
         from problm_solver.data import LLMNextTokenData
 
         out = tmp_path / 'round.json'
         sample_next_token_data.write(str(out))
-        recovered = LLMNextTokenData(prompt='', output_vec=[], top_m_tokens={})
+        recovered = LLMNextTokenData(prompt='', output_vec=[], top_k_tokens={})
         recovered.read(str(out))
-        assert recovered.top_m_tokens == pytest.approx(sample_next_token_data.top_m_tokens)
+        assert recovered.top_k_tokens == pytest.approx(sample_next_token_data.top_k_tokens)
 
 
 class TestLLMTokenDataRoundtrip:

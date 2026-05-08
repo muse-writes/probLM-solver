@@ -25,7 +25,7 @@ class GenerationContext:
         tokens so far).
     :param query_next: Queries the model for the top-M next-token log-prob
         dict given a context token ID list. Pre-bound to the current
-        ``n_tokens``. Returns ``None`` on EOS.
+        ``n_tokens``.
     :param query_branch: Generates a complete branch of up to ``depth`` tokens
         from the given context in a single model call and returns the sum of
         per-token log-probabilities. Returns ``0.0`` on immediate EOS.
@@ -35,7 +35,7 @@ class GenerationContext:
     token_probs: dict[str, float]
     prev_probs: list[float]
     context_tokens: list[int]
-    query_next: Callable[[list[int]], dict[str, float] | None]
+    query_next: Callable[[list[int]], dict[str, float]]
     query_branch: Callable[[list[int], int], float]
     tokenize_token: Callable[[str], list[int]]
 
