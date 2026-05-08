@@ -76,28 +76,73 @@ class TestModelInstanceInit:
 class TestModelInstanceQuery:
     """Tests for ModelInstance.query."""
 
-    def test_query_returns_string(self, model_instance) -> None:
+@pytest.fixture()
+def low_level_model(model_instance):
+    """Extend model_instance with low-level eval state for Phase 5 tests.
+
+    - _format_chat_prompt returns [1, 2, 3] (3-token prompt)
+    - vocab_size = 4, EOS = token 3
+    - scores[2]: token 1 is argmax (non-EOS) — first generated token
+    - scores[3]: token 3 is argmax (EOS)   — generation stops
+    - detokenize([n], special=True)  -> b'tok<n>'
+    - detokenize([n, ...], special=False) -> b'decoded output'
+    """
+    vocab_size = 4
+    eos_id = 3
+    scores = np.zeros((2048, vocab_size), dtype=np.float32)
+    scores[2] = [0.0, 3.0, 1.0, -2.0]   # n_tokens=3 after prompt: argmax=1
+    scores[3] = [-2.0, 0.0, 0.0, 5.0]   # n_tokens=4 after eval([1]): argmax=3=EOS
+
+    model_instance._llm.scores = scores
+    model_instance._llm.n_tokens = 0
+    model_instance._llm.token_eos.return_value = eos_id
+
+    def mock_detokenize(ids, special=False):
+        if special:
+            return f'tok{ids[0]}'.encode()
+        return b'decoded output'
+    model_instance._llm.detokenize.side_effect = mock_detokenize
+
+    def mock_reset():
+        model_instance._llm.n_tokens = 0
+    model_instance._llm.reset.side_effect = mock_reset
+
+    def mock_eval(tokens):
+        model_instance._llm.n_tokens += len(tokens)
+    model_instance._llm.eval.side_effect = mock_eval
+
+    with patch.object(model_instance, '_format_chat_prompt', return_value=[1, 2, 3]):
+        yield model_instance
+
+
+class TestModelInstanceQuery:
+    """Tests for ModelInstance.query."""
+
+    def test_returns_string(self, low_level_model) -> None:
         """query() returns a plain string."""
-        result = model_instance.query()
+        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+            result = low_level_model.query()
         assert isinstance(result, str)
 
-    def test_query_returns_llm_content(self, model_instance) -> None:
-        """query() returns the content field from the chat completion response."""
-        result = model_instance.query()
-        assert result == 'Test answer.'
+    def test_returns_detokenized_output(self, low_level_model) -> None:
+        """query() returns the detokenized form of the generated token IDs."""
+        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+            result = low_level_model.query()
+        assert result == 'decoded output'
 
-    def test_query_calls_create_chat_completion(self, model_instance) -> None:
-        """query() delegates to create_chat_completion on the underlying Llama object."""
-        model_instance.query()
-        model_instance._llm.create_chat_completion.assert_called_once()
+    def test_calls_reset_then_eval_with_prompt(self, low_level_model) -> None:
+        """query() calls reset() then eval() with the formatted prompt tokens."""
+        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+            low_level_model.query()
+        low_level_model._llm.reset.assert_called_once()
+        assert low_level_model._llm.eval.call_args_list[0] == call([1, 2, 3])
 
-    def test_query_sends_context_as_user_message(self, model_instance) -> None:
-        """query() sends the stored context as a user-role message."""
-        model_instance.query()
-        call_kwargs = model_instance._llm.create_chat_completion.call_args
-        messages = call_kwargs.kwargs.get('messages') or call_kwargs.args[0]
-        assert messages[0]['role'] == 'user'
-        assert messages[0]['content'] == 'What is the answer?'
+    def test_stops_at_eos(self, low_level_model) -> None:
+        """query() stops and excludes EOS; only the token before EOS is in the output."""
+        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+            low_level_model.query()
+        # eval: once for prompt, once for the non-EOS token; EOS is not eval'd
+        assert low_level_model._llm.eval.call_count == 2
 
 
 class TestModelInstanceQueryNTimes:
@@ -105,22 +150,26 @@ class TestModelInstanceQueryNTimes:
 
     def test_returns_numpy_array(self, model_instance) -> None:
         """query_n_times() returns a numpy array."""
-        result = model_instance.query_n_times(3)
+        with patch.object(model_instance, 'query', return_value='answer'):
+            result = model_instance.query_n_times(3)
         assert isinstance(result, np.ndarray)
 
     def test_array_length_matches_n(self, model_instance) -> None:
         """query_n_times(n) returns exactly n responses."""
-        result = model_instance.query_n_times(5)
+        with patch.object(model_instance, 'query', return_value='answer'):
+            result = model_instance.query_n_times(5)
         assert len(result) == 5
 
     def test_query_called_n_times(self, model_instance) -> None:
-        """query_n_times(n) calls the LLM backend exactly n times."""
-        model_instance.query_n_times(4)
-        assert model_instance._llm.create_chat_completion.call_count == 4
+        """query_n_times(n) calls query() exactly n times."""
+        with patch.object(model_instance, 'query', return_value='answer') as mock_q:
+            model_instance.query_n_times(4)
+        assert mock_q.call_count == 4
 
     def test_responses_are_strings(self, model_instance) -> None:
         """All elements in the returned array are strings."""
-        result = model_instance.query_n_times(3)
+        with patch.object(model_instance, 'query', return_value='answer'):
+            result = model_instance.query_n_times(3)
         for item in result:
             assert isinstance(item, str)
 
@@ -128,69 +177,54 @@ class TestModelInstanceQueryNTimes:
 class TestModelInstanceQueryLogProbs:
     """Tests for ModelInstance.query_log_probs."""
 
-    @pytest.fixture()
-    def logprob_model_instance(self):
-        """Return a ModelInstance whose Llama mock returns a logprobs response."""
-        from problm_solver.llama_interface import ModelInstance
-
-        mock_llm = MagicMock()
-        mock_llm.create_chat_completion.return_value = {
-            'choices': [{
-                'message': {'content': 'Four.'},
-                'logprobs': {
-                    'content': [
-                        {'token': 'Four', 'logprob': -0.105, 'bytes': None, 'top_logprobs': []},
-                        {'token': '.', 'logprob': -0.011, 'bytes': None, 'top_logprobs': []},
-                    ]
-                },
-                'finish_reason': 'stop',
-            }]
-        }
-        with patch('problm_solver.llama_interface.Llama') as MockLlama:
-            MockLlama.return_value = mock_llm
-            instance = ModelInstance(fname='fake.gguf', context='What is 2+2?')
-        return instance
-
-    def test_returns_llmtokendata(self, logprob_model_instance) -> None:
+    def test_returns_llmtokendata(self, low_level_model) -> None:
         """query_log_probs() returns an LLMTokenData instance."""
         from problm_solver.data import LLMTokenData
 
-        result = logprob_model_instance.query_log_probs()
+        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+            result = low_level_model.query_log_probs()
         assert isinstance(result, LLMTokenData)
 
-    def test_tokens_extracted_from_logprobs_content(self, logprob_model_instance) -> None:
-        """Tokens come from the logprobs content, not from re-tokenizing the text."""
-        result = logprob_model_instance.query_log_probs()
-        assert result.tokens == ['Four', '.']
+    def test_tokens_are_strings(self, low_level_model) -> None:
+        """tokens in the returned LLMTokenData are decoded strings."""
+        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+            result = low_level_model.query_log_probs()
+        assert all(isinstance(t, str) for t in result.tokens)
 
-    def test_probs_are_exp_of_logprobs(self, logprob_model_instance) -> None:
-        """Each probability is exp(logprob) of the corresponding entry."""
-        import math
+    def test_probs_are_exp_of_sampled_token_logprobs(self, low_level_model) -> None:
+        """Each probability equals exp(log-prob) of the corresponding sampled token."""
+        from problm_solver.llama_interface import ModelInstance
 
-        result = logprob_model_instance.query_log_probs()
-        expected = [math.exp(-0.105), math.exp(-0.011)]
-        assert result.probs == pytest.approx(expected)
+        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+            result = low_level_model.query_log_probs()
+        # Token 1 was sampled; its log-prob is _log_softmax(scores[2])[1].
+        lp = ModelInstance._log_softmax(np.array([0.0, 3.0, 1.0, -2.0], dtype=np.float32))
+        assert result.probs == pytest.approx([float(np.exp(lp[1]))])
 
-    def test_probs_are_between_zero_and_one(self, logprob_model_instance) -> None:
+    def test_probs_are_between_zero_and_one(self, low_level_model) -> None:
         """All probabilities are valid (in the range (0, 1])."""
-        result = logprob_model_instance.query_log_probs()
+        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+            result = low_level_model.query_log_probs()
         assert all(0.0 < p <= 1.0 for p in result.probs)
 
-    def test_tokens_and_probs_same_length(self, logprob_model_instance) -> None:
+    def test_tokens_and_probs_same_length(self, low_level_model) -> None:
         """tokens and probs are positionally aligned and have equal length."""
-        result = logprob_model_instance.query_log_probs()
+        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+            result = low_level_model.query_log_probs()
         assert len(result.tokens) == len(result.probs)
 
-    def test_prompt_is_stored(self, logprob_model_instance) -> None:
+    def test_prompt_is_stored(self, low_level_model) -> None:
         """The prompt is stored on the returned LLMTokenData."""
-        result = logprob_model_instance.query_log_probs()
-        assert result.prompt == 'What is 2+2?'
+        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+            result = low_level_model.query_log_probs()
+        assert result.prompt == 'What is the answer?'
 
-    def test_passes_top_logprobs_1_to_api(self, logprob_model_instance) -> None:
-        """query_log_probs() passes top_logprobs=1 so the chat handler enables logprob output."""
-        logprob_model_instance.query_log_probs()
-        _, kwargs = logprob_model_instance._llm.create_chat_completion.call_args
-        assert kwargs.get('top_logprobs') == 1
+    def test_stops_at_eos(self, low_level_model) -> None:
+        """query_log_probs() accumulates only the tokens generated before EOS."""
+        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+            result = low_level_model.query_log_probs()
+        # scores[2]=token1 (non-EOS), scores[3]=token3=EOS: exactly 1 token
+        assert len(result.tokens) == 1
 
 
 class TestModelInstanceGetTokenizer:
@@ -216,22 +250,26 @@ class TestModelInstanceGenerateData:
 
     def test_returns_llmoutputdata(self, model_instance) -> None:
         """generate_data() returns an LLMOutputData instance."""
-        result = model_instance.generate_data(3)
+        with patch.object(model_instance, 'query', return_value='answer'):
+            result = model_instance.generate_data(3)
         assert isinstance(result, LLMOutputData)
 
     def test_prompt_matches_context(self, model_instance) -> None:
         """generate_data() stores the model's context string as the prompt."""
-        result = model_instance.generate_data(3)
+        with patch.object(model_instance, 'query', return_value='answer'):
+            result = model_instance.generate_data(3)
         assert result.prompt == model_instance.context
 
     def test_data_length_matches_n_samples(self, model_instance) -> None:
         """generate_data(n) produces exactly n responses in the result."""
-        result = model_instance.generate_data(6)
+        with patch.object(model_instance, 'query', return_value='answer'):
+            result = model_instance.generate_data(6)
         assert len(result.data) == 6
 
     def test_written_flag_is_false(self, model_instance) -> None:
         """Freshly generated data has written=False — it hasn't been saved yet."""
-        result = model_instance.generate_data(2)
+        with patch.object(model_instance, 'query', return_value='answer'):
+            result = model_instance.generate_data(2)
         assert result.written is False
 
 
@@ -652,27 +690,38 @@ def gen_adj_model(model_instance):
     """ModelInstance with all generate_adjusted() dependencies mocked.
 
     - _format_chat_prompt returns [10, 20, 30] (prompt_length = 3)
-    - query_log_probs_next_token returns stable LLMNextTokenData each call
+    - vocab_size = 4; EOS = token 0
+    - scores[2] = [−10, 3, 1, 0.5]: top-2 are '<tok1>' and '<tok2>'
     - sample_from_logprobs (in llama_interface module) returns ' hello'
-    - _llm.token_eos() returns 0 (EOS ID)
     - _llm.tokenize() returns [42] (a non-EOS token ID)
-    - _llm.detokenize() returns b' hello world'
+    - _llm.detokenize([tid], special=True) returns b'<tokN>'
+    - reset/eval side-effects maintain n_tokens
     """
-    next_token_data = LLMNextTokenData(
-        prompt=model_instance.context,
-        output_vec=[10, 20, 30],
-        top_k_tokens={' hello': -0.5, ' world': -1.2},
-    )
+    vocab_size = 4
+    scores = np.zeros((2048, vocab_size), dtype=np.float32)
+    # n_tokens=3 after prompt eval; same logits for all subsequent positions
+    for pos in range(2, 10):
+        scores[pos] = [-10.0, 3.0, 1.0, 0.5]
+
+    model_instance._llm.scores = scores
+    model_instance._llm.n_tokens = 0
     model_instance._llm.token_eos.return_value = 0
     model_instance._llm.tokenize.return_value = [42]
-    model_instance._llm.detokenize.return_value = b' hello world'
+    model_instance._llm.detokenize.side_effect = (
+        lambda ids, special=False: f'<tok{ids[0]}>'.encode()
+    )
+
+    def mock_reset():
+        model_instance._llm.n_tokens = 0
+    model_instance._llm.reset.side_effect = mock_reset
+
+    def mock_eval(tokens):
+        model_instance._llm.n_tokens += len(tokens)
+    model_instance._llm.eval.side_effect = mock_eval
 
     with ExitStack() as stack:
         stack.enter_context(
             patch.object(model_instance, '_format_chat_prompt', return_value=[10, 20, 30])
-        )
-        stack.enter_context(
-            patch.object(model_instance, 'query_log_probs_next_token', return_value=next_token_data)
         )
         stack.enter_context(
             patch('problm_solver.llama_interface.sample_from_logprobs', return_value=' hello')
@@ -703,9 +752,10 @@ class TestGenerateAdjusted:
         assert result._written is False
 
     def test_loops_exactly_max_tokens_times(self, gen_adj_model) -> None:
-        """query_log_probs_next_token is called exactly max_tokens times when EOS never appears."""
+        """eval() is called once for the prompt then once per generated token."""
         gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=4)
-        assert gen_adj_model.query_log_probs_next_token.call_count == 4
+        # 1 prompt eval + 4 token evals
+        assert gen_adj_model._llm.eval.call_count == 5
 
     def test_adjust_fn_called_each_step(self, gen_adj_model) -> None:
         """adjust_fn is called once per generated token."""
@@ -714,11 +764,15 @@ class TestGenerateAdjusted:
         assert adjust_fn.call_count == 3
 
     def test_adjust_fn_receives_top_k_tokens(self, gen_adj_model) -> None:
-        """adjust_fn receives a GenerationContext whose token_probs is the top_k_tokens dict."""
+        """adjust_fn receives a GenerationContext whose token_probs is built from scores."""
+        from problm_solver.llama_interface import ModelInstance
+
         adjust_fn = MagicMock(return_value={' hello': -0.5})
         gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=1)
         ctx = adjust_fn.call_args[0][0]
-        assert ctx.token_probs == {' hello': -0.5, ' world': -1.2}
+        # scores[2] = [-10, 3, 1, 0.5]; top-2 are '<tok1>' and '<tok2>'
+        lp = ModelInstance._log_softmax(np.array([-10.0, 3.0, 1.0, 0.5], dtype=np.float32))
+        assert ctx.token_probs == pytest.approx({'<tok1>': float(lp[1]), '<tok2>': float(lp[2])})
 
     def test_adjust_fn_receives_empty_prev_probs_on_first_step(self, gen_adj_model) -> None:
         """adjust_fn receives a GenerationContext with empty prev_probs on the first step."""
@@ -745,19 +799,40 @@ class TestGenerateAdjusted:
         """The loop breaks before max_tokens when tokenize returns the EOS token ID."""
         gen_adj_model._llm.tokenize.return_value = [0]
         gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=10)
-        assert gen_adj_model.query_log_probs_next_token.call_count == 1
+        # Only the prompt eval ran; no token eval because first sample was EOS
+        assert gen_adj_model._llm.eval.call_count == 1
 
     def test_stops_early_on_empty_token_ids(self, gen_adj_model) -> None:
         """The loop breaks when tokenize returns an empty list for the sampled token."""
         gen_adj_model._llm.tokenize.return_value = []
         gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=10)
-        assert gen_adj_model.query_log_probs_next_token.call_count == 1
+        assert gen_adj_model._llm.eval.call_count == 1
 
     def test_prev_probs_reset_between_calls(self, gen_adj_model) -> None:
         """prev_probs starts empty on every call to generate_adjusted, not carried over."""
         adjust_fn = MagicMock(return_value={' hello': -0.5})
         gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=2)
-        gen_adj_model.query_log_probs_next_token.reset_mock()
+        gen_adj_model._llm.eval.reset_mock()
         adjust_fn.reset_mock()
         gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=1)
         assert adjust_fn.call_args_list[0][0][0].prev_probs == []
+
+    def test_eval_called_with_prompt_first(self, gen_adj_model) -> None:
+        """The first eval() call in generate_adjusted receives the formatted prompt tokens."""
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=1)
+        # context is a mutable list extended by token_ids, so check the leading prompt slice.
+        first_call_args = gen_adj_model._llm.eval.call_args_list[0].args[0]
+        assert first_call_args[:3] == [10, 20, 30]
+
+    def test_eval_called_once_per_token_plus_prompt(self, gen_adj_model) -> None:
+        """generate_adjusted uses incremental eval: once for the prompt then once per token."""
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
+        # 1 prompt eval + 3 token evals = 4 total
+        assert gen_adj_model._llm.eval.call_count == 4
+
+    def test_single_token_eval_per_step(self, gen_adj_model) -> None:
+        """Each per-token eval() call passes exactly the new token IDs, not the full context."""
+        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=2)
+        # Call 0 is the prompt; calls 1+ are single-token evals
+        for token_call in gen_adj_model._llm.eval.call_args_list[1:]:
+            assert token_call == call([42])  # tokenize() returns [42]

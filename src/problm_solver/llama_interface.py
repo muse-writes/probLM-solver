@@ -1,7 +1,6 @@
 """llama.cpp python interface for running local models."""
 
 import copy
-import math
 from inspect import isclass
 from typing import Any
 
@@ -73,11 +72,19 @@ class ModelInstance:
 
         :returns: the response string.
         """
-        output = self._llm.create_chat_completion(
-            messages=[{'role': 'user', 'content': self.context}],
-            max_tokens=512,
-        )
-        return output['choices'][0]['message']['content']
+        max_tokens = 512 # TODO(Clio): Remove hard-coded maximum here.
+        prompt_tokens = self._format_chat_prompt()
+        self._llm.reset()
+        self._llm.eval(prompt_tokens)
+        tokens = []
+        for _ in range(max_tokens):
+            logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+            next_id = int(np.argmax(logprobs + np.random.gumbel(size=len(logprobs))))
+            if next_id == self._llm.token_eos():
+                break
+            tokens.append(next_id)
+            self._llm.eval([next_id])
+        return self._llm.detokenize(tokens).decode('utf-8')
 
 
     def generate_data(self, n_samples: int) -> LLMOutputData:
@@ -93,23 +100,30 @@ class ModelInstance:
     def query_log_probs(self) -> LLMTokenData:
         """Query the model and return the response as tokens with probabilities.
 
-        Calls the model with ``logprobs=True``, which causes the API to return
-        the model's own BPE tokenization of the response alongside the
-        log-probability of each token at its position. Log-probabilities are
-        converted to probabilities via ``exp``.
+        Evaluates the formatted prompt in a single forward pass, then samples
+        tokens autoregressively using the Gumbel-max trick until EOS or
+        ``max_tokens`` steps are reached.  Each sampled token is decoded to a
+        string via :meth:`_tokens_as_strings` and its probability is computed
+        as ``exp(log_softmax(logits)[token_id])``.
 
-        :returns: A data container holding the prompt, alongside the tokens and their
-            probabilities.
+        :returns: A data container holding the prompt, alongside the tokens and
+            their probabilities.
         """
-        output = self._llm.create_chat_completion(
-            messages=[{'role': 'user', 'content': self.context}],
-            max_tokens=512,
-            logprobs=True,
-            top_logprobs=1,
-        )
-        logprob_content = output['choices'][0]['logprobs']['content']
-        tokens: TokenSequence = [entry['token'] for entry in logprob_content]
-        probs: list[float] = [math.exp(entry['logprob']) for entry in logprob_content]
+        max_tokens = 512  # TODO(Clio): Remove hard-coded maximum here.
+        prompt_tokens = self._format_chat_prompt()
+        self._llm.reset()
+        self._llm.eval(prompt_tokens)
+        tokens: TokenSequence = []
+        probs: list[float] = []
+        eos_id = self._llm.token_eos()
+        for _ in range(max_tokens):
+            logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+            next_id = int(np.argmax(logprobs + np.random.gumbel(size=len(logprobs))))
+            if next_id == eos_id:
+                break
+            tokens.append(self._tokens_as_strings([next_id])[0])
+            probs.append(float(np.exp(logprobs[next_id])))
+            self._llm.eval([next_id])
         return LLMTokenData(prompt=self.context, tokens=tokens, probs=probs)
 
 
@@ -356,18 +370,24 @@ class ModelInstance:
             raise NotImplementedError
 
 
-# Main loop setup.
-        context = self._format_chat_prompt()
-        eos_id = self._llm.token_eos()
+# Data storage variables setup.
         prev_probs: list[float] = []
         response_prob_tokens: list[str] = []
         response_prob_values: list[float] = []
         response_topk_dists: list[dict[str, float]] = []
 
+# LLM state setup.
+        eos_id = self._llm.token_eos()
+        context = self._format_chat_prompt()
+        self._llm.reset()
+        self._llm.eval(context)
+
+# Main generation loop.
         for _ in range(max_tokens):
-            next_token_data = self.query_log_probs_next_token(context, n_tokens)
+            logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+            top_k = self._top_k_from_logprobs(logprobs, n_tokens)
             ctx = GenerationContext(
-                token_probs=next_token_data.top_k_tokens,
+                token_probs=top_k,
                 prev_probs=list(prev_probs),
                 context_tokens=list(context),
                 query_next=lambda ctx_ids: (
@@ -384,9 +404,10 @@ class ModelInstance:
                 token_str.encode('utf-8'), add_bos=False, special=False,
             )
 
-# Check for end.
+# Check for end, call eval() if continuing.
             if not token_ids or eos_id in token_ids:
                 break
+            self._llm.eval(token_ids)
 
 # Assign various data variables for safekeeping.
             token_prob = float(prob_of_token(token_str, adjusted))
@@ -395,6 +416,7 @@ class ModelInstance:
             response_prob_values.append(token_prob)
             response_topk_dists.append({k: float(v) for k, v in adjusted.items()})
             context.extend(token_ids)
+
 
 # Construct dataclass output.
         return LLMOutputDataFull(
