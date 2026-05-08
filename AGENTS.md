@@ -109,13 +109,15 @@ constants.py → (no intra-package deps)
 - **Options**: Exit on first failure, verbose (v=2), JUnit XML reports
 - **Paths**: `src/`, `tests/`
 - **Test files**: `test_import.py`, `test_data.py`, `test_cli.py`, `test_llama_interface.py`, `test_probabilities.py`, `test_adjust_probs.py`
-- **Total tests**: 210
+- **Total tests**: 229
 - **Doctests**: `WordTokenizer` and `LlamaTokenizer` have inline doctests collected by `--doctest-modules`
 - **Mocking**:
   - `llama_cpp.Llama` is patched at construction time in all `ModelInstance` tests; `_make_llama_mock` provides metadata and `n_ctx` so `__init__`'s cache-sizing logic runs correctly
   - `llama_cpp.LlamaRAMCache` is patched in `test_cache_sized_from_model_metadata`
   - `Jinja2ChatFormatter` is patched at `problm_solver.llama_interface.Jinja2ChatFormatter` in `TestFormatChatPrompt`
-  - `_format_chat_prompt`, `query_log_probs_next_token`, `sample_from_logprobs`, and `prob_of_token` are all patched in the `gen_adj_model` fixture via `contextlib.ExitStack`
+  - Low-level `eval`/`scores`/`save_state`/`load_state` methods are mocked with `side_effect` functions that maintain `n_tokens` state, mirroring real llama_cpp behaviour; `scores` is a real numpy array with known values at the relevant `n_tokens - 1` row
+  - `numpy.random.gumbel` is patched to `np.zeros(vocab_size)` in branch and generation tests to make sampling deterministic (greedy)
+  - `_format_chat_prompt`, `sample_from_logprobs`, and `prob_of_token` are all patched in the `gen_adj_model` fixture via `contextlib.ExitStack`
   - `adjust_fn` receives a `GenerationContext`; `MagicMock.call_args_list` inspection reads `.prev_probs` from the context object
   - `GenerationContext` fixtures in `test_adjust_probs.py` supply a `query_branch=MagicMock(return_value=-1.5)` field
   - CLI filesystem interactions use `monkeypatch` against `tmp_path`
@@ -145,12 +147,22 @@ constants.py → (no intra-package deps)
 
 5. **Equilibration period not user-configurable** (`adjust_probs.py`): `should_continue()` discards `branch_log_probs[:equil_branches]` as a fixed equilibration period. Whether this is the right threshold, and whether users should be able to control it separately from `equil_branches`, is an open design question (TODO in source).
 
-6. **`save_live_state()` missing return** (`llama_interface.py`): calls `self._llm.save_state()` but does not return its result; annotated `-> LlamaState` but always returns `None`.
+6. **`top_p` stubbed** (`llama_interface.py`): `top_p` keyword argument accepted by `generate_adjusted()` but raises `NotImplementedError` if passed any non-`None` value.
 
-7. **`top_p` stubbed** (`llama_interface.py`): `top_p` keyword argument accepted by `generate_adjusted()` but raises `NotImplementedError` if passed any non-`None` value.
+7. **`ui_generate_low_temp` missing `sampling_method`** (`cli.py`): does not pass `sampling_method` to `generate_adjusted()`; the label stored in `LLMOutputDataFull` is auto-derived as `'SampleLowTemp'` rather than a clean human-readable string.
 
-8. **`ui_generate_low_temp` missing `sampling_method`** (`cli.py`): does not pass `sampling_method` to `generate_adjusted()`; the label stored in `LLMOutputDataFull` is auto-derived as `'SampleLowTemp'` rather than a clean human-readable string.
+8. **`get_adjusted_path()` extension** (`cli.py`): returns a `.jsonl` path, but `LLMOutputDataFull.write()` produces single-record JSON; should be `.json`.
 
-9. **`get_adjusted_path()` extension** (`cli.py`): returns a `.jsonl` path, but `LLMOutputDataFull.write()` produces single-record JSON; should be `.json`.
+9. **`_written` comment indentation** (`data.py`): the inline comment `# Unsaved data state tracking variable.` before `_written` is at column 0 inside the `LLMOutputDataFull` class body; should be indented 4 spaces.
 
-10. **`_written` comment indentation** (`data.py`): the inline comment `# Unsaved data state tracking variable.` before `_written` is at column 0 inside the `LLMOutputDataFull` class body; should be indented 4 spaces.
+10. **`query_next` lambda resets model state** (`llama_interface.py`): the `query_next` callable in `GenerationContext` is bound to `query_log_probs_next_token`, which calls `reset()` + `eval()` on the shared `_llm` instance. If an `adjust_fn` calls `query_next` during `generate_adjusted`, it will corrupt the incremental eval state that the generation loop depends on.
+
+---
+
+## Known Issues — Resolved
+
+- ✓ `save_live_state()` missing return — `return self._llm.save_state()` added
+- ✓ `scores[-1]` wrong indexing — corrected to `scores[self._llm.n_tokens - 1]` throughout (`llama_cpp.Llama.eval` writes to `scores[n_past : n_past + n_tokens]`, so the last valid row is always `n_tokens - 1`)
+- ✓ Full migration from `create_completion` / `create_chat_completion` to low-level `eval` / `scores` / `save_state` / `load_state` API — `query`, `query_log_probs`, `query_log_probs_next_token`, `query_branch`, and `generate_adjusted` all migrated; two new private helpers added: `_log_softmax` and `_top_k_from_logprobs`
+- ✓ `LLMNextTokenData.top_m_tokens` renamed to `top_k_tokens` (constructor param, attribute, JSON key)
+- ✓ `GenerationContext.query_next` return type simplified — `| None` removed; EOS detection moved to caller
