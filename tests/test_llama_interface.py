@@ -438,6 +438,135 @@ class TestFormatChatPrompt:
         assert result == [1, 2, 3, 4, 5]
 
 
+class TestLogSoftmax:
+    """Tests for ModelInstance._log_softmax."""
+
+    def test_output_is_valid_log_probability_distribution(self) -> None:
+        """exp(log_softmax(x)) sums to 1.0 over the full vocabulary."""
+        from problm_solver.llama_interface import ModelInstance
+
+        logits = np.array([1.0, 2.0, 0.5, -1.0], dtype=np.float32)
+        result = ModelInstance._log_softmax(logits)
+        assert np.exp(result).sum() == pytest.approx(1.0)
+
+    def test_argmax_is_preserved(self) -> None:
+        """The token with the highest logit has the highest log-probability."""
+        from problm_solver.llama_interface import ModelInstance
+
+        logits = np.array([0.1, 3.0, -1.0, 0.5], dtype=np.float32)
+        result = ModelInstance._log_softmax(logits)
+        assert np.argmax(result) == np.argmax(logits)
+
+    def test_all_values_are_non_positive(self) -> None:
+        """All log-probabilities are ≤ 0 (probabilities are in (0, 1])."""
+        from problm_solver.llama_interface import ModelInstance
+
+        logits = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        result = ModelInstance._log_softmax(logits)
+        assert np.all(result <= 0.0)
+
+    def test_returns_float64_array(self) -> None:
+        """Output dtype is float64 regardless of the input dtype."""
+        from problm_solver.llama_interface import ModelInstance
+
+        logits = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        result = ModelInstance._log_softmax(logits)
+        assert result.dtype == np.float64
+
+    def test_output_shape_matches_input(self) -> None:
+        """Output array has the same shape as the input logits."""
+        from problm_solver.llama_interface import ModelInstance
+
+        logits = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float32)
+        result = ModelInstance._log_softmax(logits)
+        assert result.shape == logits.shape
+
+    def test_numerically_stable_with_large_logits(self) -> None:
+        """Does not overflow when logits are in the hundreds, as is common for LLMs."""
+        from problm_solver.llama_interface import ModelInstance
+
+        logits = np.array([300.0, 200.0, 100.0], dtype=np.float32)
+        result = ModelInstance._log_softmax(logits)
+        assert np.all(np.isfinite(result))
+        assert np.exp(result).sum() == pytest.approx(1.0)
+
+    def test_uniform_logits_produce_equal_log_probs(self) -> None:
+        """All-equal logits map to the same log-probability for every token."""
+        from problm_solver.llama_interface import ModelInstance
+
+        logits = np.full(5, 2.0, dtype=np.float32)
+        result = ModelInstance._log_softmax(logits)
+        assert np.allclose(result, result[0])
+
+
+class TestTopKFromLogprobs:
+    """Tests for ModelInstance._top_k_from_logprobs."""
+
+    @pytest.fixture()
+    def logprob_model(self, model_instance):
+        """Configure detokenize to return '<tokN>' for token ID N."""
+        model_instance._llm.detokenize.side_effect = (
+            lambda ids, special=False: f'<tok{ids[0]}>'.encode()
+        )
+        return model_instance
+
+    def test_returns_exactly_n_entries(self, logprob_model) -> None:
+        """The returned dict has exactly n entries."""
+        logprobs = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float64)
+        result = logprob_model._top_k_from_logprobs(logprobs, n=3)
+        assert len(result) == 3
+
+    def test_contains_highest_logprob_tokens(self, logprob_model) -> None:
+        """Result contains the n tokens with the highest log-probabilities."""
+        logprobs = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float64)
+        result = logprob_model._top_k_from_logprobs(logprobs, n=2)
+        # Top 2: index 2 (-0.5) and index 1 (-1.0)
+        assert '<tok2>' in result
+        assert '<tok1>' in result
+
+    def test_excludes_lower_logprob_tokens(self, logprob_model) -> None:
+        """Tokens outside the top-n are not present in the result."""
+        logprobs = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float64)
+        result = logprob_model._top_k_from_logprobs(logprobs, n=2)
+        assert '<tok0>' not in result
+        assert '<tok3>' not in result
+        assert '<tok4>' not in result
+
+    def test_values_match_logprobs_of_their_tokens(self, logprob_model) -> None:
+        """Each dict value equals the log-probability at the corresponding vocab index."""
+        logprobs = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float64)
+        result = logprob_model._top_k_from_logprobs(logprobs, n=3)
+        assert result['<tok2>'] == pytest.approx(-0.5)
+        assert result['<tok1>'] == pytest.approx(-1.0)
+        assert result['<tok3>'] == pytest.approx(-2.0)
+
+    def test_values_are_python_floats(self, logprob_model) -> None:
+        """All values are plain Python floats, not numpy scalars."""
+        logprobs = np.array([-1.0, -2.0, -3.0], dtype=np.float64)
+        result = logprob_model._top_k_from_logprobs(logprobs, n=2)
+        assert all(type(v) is float for v in result.values())
+
+    def test_sorted_descending_by_log_prob(self, logprob_model) -> None:
+        """Keys are ordered from highest to lowest log-probability (dict insertion order)."""
+        logprobs = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float64)
+        result = logprob_model._top_k_from_logprobs(logprobs, n=3)
+        values = list(result.values())
+        assert values == sorted(values, reverse=True)
+
+    def test_n_clamped_to_vocab_size(self, logprob_model) -> None:
+        """Requesting more tokens than vocab size returns every token."""
+        logprobs = np.array([-1.0, -2.0, -3.0], dtype=np.float64)
+        result = logprob_model._top_k_from_logprobs(logprobs, n=100)
+        assert len(result) == 3
+
+    def test_n_of_one_returns_single_highest_token(self, logprob_model) -> None:
+        """n=1 returns only the argmax token with its log-probability."""
+        logprobs = np.array([-3.0, -0.1, -2.0], dtype=np.float64)
+        result = logprob_model._top_k_from_logprobs(logprobs, n=1)
+        assert list(result.keys()) == ['<tok1>']
+        assert result['<tok1>'] == pytest.approx(-0.1)
+
+
 @pytest.fixture()
 def gen_adj_model(model_instance):
     """ModelInstance with all generate_adjusted() dependencies mocked.

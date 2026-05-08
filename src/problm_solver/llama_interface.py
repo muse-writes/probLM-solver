@@ -175,6 +175,8 @@ class ModelInstance:
 
 ## -- Miscellaneous -- ##
 
+### -- Expose lower level Llama API -- ###
+
     def reset_state(self) -> None:
         """Reset model state. Low-level Llama API."""
         self._llm.reset()
@@ -187,7 +189,7 @@ class ModelInstance:
 
     def save_live_state(self) -> LlamaState:
         """Return LlamaState object."""
-        self._llm.save_state()
+        return self._llm.save_state()
 
 
     def load_live_state(self, state: LlamaState) -> None:
@@ -236,6 +238,56 @@ class ModelInstance:
             self._llm.detokenize([tid], special=True).decode('utf-8', errors='replace')
             for tid in token_ids
         ]
+
+
+    @staticmethod
+    def _log_softmax(logits: npt.NDArray[np.float32]) -> npt.NDArray[np.float64]:
+        """Apply numerically stable log-softmax to a 1-D logits vector.
+
+        Subtracts the maximum logit before exponentiation to prevent float
+        overflow (common with raw LLM logits which can exceed ±300), then
+        uses the log-sum-exp identity:
+
+        .. code-block:: text
+
+            log_softmax(x_i) = (x_i − max x) − log Σ_j exp(x_j − max x)
+
+        The result satisfies ``exp(result).sum() ≈ 1`` and all values are ≤ 0.
+
+        :param logits: 1-D array of raw model logits for the full vocabulary.
+        :returns: 1-D float64 array of log-probabilities.
+        """
+        x = logits.astype(np.float64)
+        shifted = x - x.max()
+        return shifted - np.log(np.exp(shifted).sum())
+
+
+    def _top_k_from_logprobs(
+        self,
+        logprobs: npt.NDArray[np.float64],
+        n: int,
+    ) -> dict[str, float]:
+        """Return the top-n tokens and their log-probabilities from a full-vocabulary array.
+
+        Uses ``numpy.argpartition`` for O(V) selection, then sorts the
+        selected indices so the returned dict is ordered from highest to
+        lowest log-probability (Python 3.7+ dict insertion order).
+        Token IDs are converted to strings via :meth:`_tokens_as_strings`.
+
+        If ``n`` exceeds the vocabulary size it is silently clamped so that
+        all tokens are returned.
+
+        :param logprobs: 1-D log-probability array over the full vocabulary,
+            as returned by :meth:`_log_softmax`.
+        :param n: Number of top candidates to return.
+        :returns: ``{token_string: log_prob}`` for the *n* most probable
+            tokens, ordered from highest to lowest log-probability.
+        """
+        n = min(n, len(logprobs))
+        top_indices = np.argpartition(logprobs, -n)[-n:]
+        top_indices = top_indices[np.argsort(logprobs[top_indices])[::-1]]
+        token_strings = self._tokens_as_strings(top_indices.tolist())
+        return {s: float(logprobs[idx]) for s, idx in zip(token_strings, top_indices)}
 
 
 ## -- Adjusting probabilities -- ##
