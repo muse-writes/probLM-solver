@@ -136,7 +136,7 @@ class ModelInstance:
         """
         self._llm.reset()
         self._llm.eval(context_tokens)
-        logprobs = self._log_softmax(self._llm.scores[-1]) # shape: (n_vocab,)
+        logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
         top_k = self._top_k_from_logprobs(logprobs, n_tokens)
         return LLMNextTokenData(
             prompt=self.context,
@@ -148,29 +148,56 @@ class ModelInstance:
     def query_branch(self, context_tokens: list[int], max_tokens: int) -> float:
         """Generate a branch of up to max_tokens and return its total log-probability.
 
-        Makes a single ``create_completion`` call with ``logprobs=1`` so that
-        llama_cpp populates ``token_logprobs`` — the log-probability of each
-        actually-sampled token under the full model vocabulary. The values are
-        summed to give the branch log-probability.
+        Evaluates ``context_tokens`` in a single forward pass, then immediately
+        snapshots the resulting KV cache and logit state via
+        :meth:`save_live_state`.  That snapshot is restored via
+        :meth:`load_live_state` before the generation loop begins, which
+        guarantees a clean branch start regardless of any side-effects from
+        the save itself, and lays the groundwork for future multi-branch calls
+        where the context prefix need only be evaluated once.
 
-        If EOS is reached before ``max_tokens``, the shorter response is
-        returned with no penalty, matching the early-EOS behaviour of the
-        previous token-by-token loop.
+        At each step ``scores[n_tokens - 1]`` is the logit row for the most
+        recently decoded position (the ``[n_past : n_past + n_tokens]`` slice
+        written by :meth:`eval` with ``logits_all=True``).  A token is sampled
+        via the Gumbel-max trick — equivalent to ancestral sampling from the
+        full-vocabulary categorical distribution — and its log-probability is
+        accumulated.  Generation stops at EOS or after ``max_tokens`` steps.
 
         :param context_tokens: The current context as a list of integer token IDs.
         :param max_tokens: Maximum number of tokens to generate in the branch.
         :returns: Sum of per-token log-probabilities for all generated tokens,
-            or ``0.0`` if the model generates EOS immediately.
+            or ``0.0`` if EOS is sampled on the first step.
         """
-        output = self._llm.create_completion(
-            context_tokens,
-            max_tokens=max_tokens,
-            logprobs=1,
-        )
-        token_logprobs: list[float | None] = (
-            output['choices'][0]['logprobs']['token_logprobs']
-        )
-        return float(sum(lp for lp in token_logprobs if lp is not None))
+        self._llm.reset()
+        self._llm.eval(context_tokens)
+
+        # Snapshot the KV cache and logits immediately after evaluating the
+        # context.  Restoring this state before generation ensures the branch
+        # always starts from the clean post-context position and is not
+        # affected by any internal bookkeeping inside save_live_state.
+        pre_branch_state = self.save_live_state()
+        self.load_live_state(pre_branch_state)
+
+        eos_id = self._llm.token_eos()
+        total_log_prob = 0.0
+
+        for _ in range(max_tokens):
+            # scores[n_tokens - 1] is the most recently decoded logit row,
+            # valid for logits_all=True (filled by eval's n_past slice).
+            logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+
+            # Gumbel-max trick: argmax(log p + Gumbel(0,1)) is equivalent to
+            # drawing from categorical(softmax(log p)) without materialising
+            # the full probability vector.
+            next_id = int(np.argmax(logprobs + np.random.gumbel(size=len(logprobs))))
+
+            if next_id == eos_id:
+                break
+
+            total_log_prob += float(logprobs[next_id])
+            self._llm.eval([next_id])
+
+        return total_log_prob
 
 
 ## -- Miscellaneous -- ##

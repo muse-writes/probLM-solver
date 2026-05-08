@@ -1,7 +1,7 @@
 """Tests for ModelInstance in llama_interface.py."""
 
 from contextlib import ExitStack
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import numpy as np
 import pytest
@@ -245,72 +245,147 @@ def _make_next_token_completion(top_logprobs: dict) -> dict:
     }
 
 
-def _make_branch_completion(token_logprobs: list) -> dict:
-    """Build a create_completion return value with the given token_logprobs list."""
-    return {
-        'choices': [{
-            'logprobs': {
-                'token_logprobs': token_logprobs,
-                'tokens': ['token'] * len(token_logprobs),
-            },
-            'finish_reason': 'length' if token_logprobs else 'stop',
-        }]
-    }
-
-
 class TestModelInstanceQueryBranch:
     """Tests for ModelInstance.query_branch."""
 
+    # Vocabulary size and EOS token ID used across the fixture and tests.
+    _VOCAB = 5
+    _EOS = 4
+
     @pytest.fixture()
     def branch_model(self, model_instance):
-        """Configure the mock LLM to return a branch completion response."""
-        model_instance._llm.create_completion.return_value = _make_branch_completion(
-            [-0.5, -1.0, -0.3]
-        )
+        """Configure mock LLM for query_branch with full n_tokens state tracking.
+
+        Context [10, 20, 30] has 3 tokens, so after reset + eval the first
+        logit row queried is scores[2].  Each subsequent eval([token]) advances
+        n_tokens by 1, so scores[3], scores[4] … are used in turn.
+
+        save_state captures the current n_tokens value; load_state restores it,
+        mirroring real llama_cpp behaviour.
+        """
+        scores = np.zeros((2048, self._VOCAB), dtype=np.float32)
+        # scores[2]: token 1 is argmax (non-EOS)
+        scores[2] = [0.5, 3.0, 1.5, 0.2, -2.0]
+        # scores[3]: token 2 is argmax (non-EOS)
+        scores[3] = [0.5, 0.5, 2.0, 0.2, -2.0]
+        # scores[4]: token 0 is argmax (non-EOS)
+        scores[4] = [2.0, 0.5, 0.5, 0.2, -2.0]
+
+        model_instance._llm.scores = scores
+        model_instance._llm.n_tokens = 0
+        model_instance._llm.token_eos.return_value = self._EOS
+
+        n_tokens_snapshot = [0]
+        saved_state = MagicMock()
+
+        def mock_reset():
+            model_instance._llm.n_tokens = 0
+        model_instance._llm.reset.side_effect = mock_reset
+
+        def mock_eval(tokens):
+            model_instance._llm.n_tokens += len(tokens)
+        model_instance._llm.eval.side_effect = mock_eval
+
+        def mock_save_state():
+            n_tokens_snapshot[0] = model_instance._llm.n_tokens
+            return saved_state
+        model_instance._llm.save_state.side_effect = mock_save_state
+
+        def mock_load_state(state):
+            if state is saved_state:
+                model_instance._llm.n_tokens = n_tokens_snapshot[0]
+        model_instance._llm.load_state.side_effect = mock_load_state
+
+        # Expose the sentinel so tests can assert the exact object passed.
+        model_instance._test_saved_state = saved_state
         return model_instance
 
     def test_returns_float(self, branch_model) -> None:
-        """query_branch() returns a float."""
-        result = branch_model.query_branch([1, 2, 3], max_tokens=3)
+        """query_branch() returns a Python float."""
+        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+            result = branch_model.query_branch([10, 20, 30], max_tokens=1)
         assert isinstance(result, float)
 
-    def test_sums_token_logprobs(self, branch_model) -> None:
-        """result equals the sum of all token_logprobs entries."""
-        result = branch_model.query_branch([1, 2, 3], max_tokens=3)
-        assert result == pytest.approx(-0.5 + -1.0 + -0.3)
-
-    def test_returns_zero_for_immediate_eos(self, model_instance) -> None:
-        """Returns 0.0 when token_logprobs is empty (model generates EOS immediately)."""
-        model_instance._llm.create_completion.return_value = _make_branch_completion([])
-        result = model_instance.query_branch([1, 2, 3], max_tokens=5)
+    def test_returns_zero_for_immediate_eos(self, branch_model) -> None:
+        """Returns 0.0 when the first sampled token is EOS."""
+        # Make EOS the argmax by giving it an overwhelming logit.
+        branch_model._llm.scores[2] = [-10.0, -10.0, -10.0, -10.0, 10.0]
+        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+            result = branch_model.query_branch([10, 20, 30], max_tokens=5)
         assert result == 0.0
 
-    def test_partial_branch_sums_available_logprobs(self, model_instance) -> None:
-        """When EOS stops generation early, only the available logprobs are summed."""
-        model_instance._llm.create_completion.return_value = _make_branch_completion(
-            [-0.5, -1.0]  # only 2 of the requested 5 tokens were generated
-        )
-        result = model_instance.query_branch([1, 2, 3], max_tokens=5)
-        assert result == pytest.approx(-0.5 + -1.0)
+    def test_sums_log_probs_of_generated_tokens(self, branch_model) -> None:
+        """Return value equals the sum of log-probs of the sampled tokens."""
+        from problm_solver.llama_interface import ModelInstance
 
-    def test_passes_context_tokens_as_prompt(self, branch_model) -> None:
-        """create_completion receives context_tokens as its positional argument."""
+        # With Gumbel noise = 0, sampling is greedy: argmax of logprobs.
+        # Step 1: scores[2], argmax = 1 (logit 3.0)
+        # Step 2: scores[3], argmax = 2 (logit 2.0)
+        lp1 = float(ModelInstance._log_softmax(
+            np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
+        )[1])
+        lp2 = float(ModelInstance._log_softmax(
+            np.array([0.5, 0.5, 2.0, 0.2, -2.0], dtype=np.float32)
+        )[2])
+        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+            result = branch_model.query_branch([10, 20, 30], max_tokens=2)
+        assert result == pytest.approx(lp1 + lp2)
+
+    def test_stops_at_max_tokens(self, branch_model) -> None:
+        """Generation stops after exactly max_tokens tokens when EOS never appears."""
+        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+            branch_model.query_branch([10, 20, 30], max_tokens=2)
+        # eval: once for context, once per generated token (2 tokens)
+        assert branch_model._llm.eval.call_count == 3
+
+    def test_eos_log_prob_not_included_in_sum(self, branch_model) -> None:
+        """The log-probability of the EOS token itself is not added to the total."""
+        from problm_solver.llama_interface import ModelInstance
+
+        # Step 1 generates token 1 (non-EOS); step 2 generates EOS.
+        branch_model._llm.scores[3] = [-10.0, -10.0, -10.0, -10.0, 10.0]  # EOS argmax
+        lp1 = float(ModelInstance._log_softmax(
+            np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
+        )[1])
+        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+            result = branch_model.query_branch([10, 20, 30], max_tokens=5)
+        assert result == pytest.approx(lp1)
+
+    def test_calls_reset(self, branch_model) -> None:
+        """reset() is called once to clear stale KV-cache state."""
+        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+            branch_model.query_branch([10, 20, 30], max_tokens=1)
+        branch_model._llm.reset.assert_called_once()
+
+    def test_calls_eval_with_context_tokens(self, branch_model) -> None:
+        """eval() is first called with the full context token list."""
         context = [10, 20, 30]
-        branch_model.query_branch(context, max_tokens=3)
-        args, _ = branch_model._llm.create_completion.call_args
-        assert args[0] == context
+        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+            branch_model.query_branch(context, max_tokens=1)
+        assert branch_model._llm.eval.call_args_list[0] == call(context)
 
-    def test_passes_max_tokens(self, branch_model) -> None:
-        """create_completion is called with the correct max_tokens."""
-        branch_model.query_branch([1, 2, 3], max_tokens=7)
-        _, kwargs = branch_model._llm.create_completion.call_args
-        assert kwargs.get('max_tokens') == 7
+    def test_saves_state_after_context_eval(self, branch_model) -> None:
+        """save_state() is called exactly once, after evaluating the context."""
+        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+            branch_model.query_branch([10, 20, 30], max_tokens=1)
+        branch_model._llm.save_state.assert_called_once()
+        # The n_tokens captured at save time equals len(context_tokens).
+        assert branch_model._llm.n_tokens >= 3  # at least context + 1 generated
 
-    def test_passes_logprobs_1(self, branch_model) -> None:
-        """create_completion is called with logprobs=1 to enable token_logprobs."""
-        branch_model.query_branch([1, 2, 3], max_tokens=3)
-        _, kwargs = branch_model._llm.create_completion.call_args
-        assert kwargs.get('logprobs') == 1
+    def test_loads_saved_state(self, branch_model) -> None:
+        """load_state() is called with exactly the object returned by save_state()."""
+        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+            branch_model.query_branch([10, 20, 30], max_tokens=1)
+        branch_model._llm.load_state.assert_called_once_with(
+            branch_model._test_saved_state
+        )
+
+    def test_eval_called_once_per_generated_token(self, branch_model) -> None:
+        """eval() is called once for the context and once for each generated token."""
+        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+            branch_model.query_branch([10, 20, 30], max_tokens=3)
+        # 1 context eval + 3 single-token evals
+        assert branch_model._llm.eval.call_count == 4
 
 
 class TestQueryLogProbsNextToken:
@@ -320,17 +395,26 @@ class TestQueryLogProbsNextToken:
     def next_token_model(self, model_instance):
         """Configure mock LLM for query_log_probs_next_token.
 
-        scores[-1] contains known logits over a 5-token vocab:
-        token 1 highest (3.0), token 3 second (2.0), rest lower.
-        detokenize returns '<tokN>' for token ID N.
+        scores[n_tokens - 1] is the logit row used, so after reset() +
+        eval([1, 2, 3]) n_tokens=3 and the test values sit at scores[2].
         """
         vocab_size = 5
         scores = np.zeros((2048, vocab_size), dtype=np.float32)
-        scores[-1] = [0.0, 3.0, 1.0, 2.0, 0.5]
+        scores[2] = [0.0, 3.0, 1.0, 2.0, 0.5]  # token 1 highest, token 3 second
         model_instance._llm.scores = scores
+        model_instance._llm.n_tokens = 0
         model_instance._llm.detokenize.side_effect = (
             lambda ids, special=False: f'<tok{ids[0]}>'.encode()
         )
+
+        def mock_reset():
+            model_instance._llm.n_tokens = 0
+        model_instance._llm.reset.side_effect = mock_reset
+
+        def mock_eval(tokens):
+            model_instance._llm.n_tokens += len(tokens)
+        model_instance._llm.eval.side_effect = mock_eval
+
         return model_instance
 
     def test_always_returns_llmnexttokendata(self, next_token_model) -> None:
