@@ -15,7 +15,7 @@ This library is currently in active development, so expect large changes.
 This project is managed with uv, ensure you have Python, pip, and uv installed. To create and activate the virtual environment, run:
 
 ```sh
-uv sync --python 3.13 --no-dev \
+uv sync --python 3.13 --no-dev
 source .venv/bin/activate
 ```
 
