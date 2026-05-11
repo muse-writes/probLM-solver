@@ -6,12 +6,39 @@ A python library and CLI app built on top of llama.cpp which can generate and mo
 
 Of particular importance is the ability to define sampling functions for token generation, based off of the answer's power distribution, via iteratively sampling branches of future tokens.
 
-## Using
+This library is currently in active development, so expect large changes.
+
+## Usage
+
+### Bare Metal
+
+This project is managed with uv, ensure you have Python, pip, and uv installed. To create and activate the virtual environment, run:
+
+```sh
+uv sync --python 3.13 --no-dev \
+source .venv/bin/activate
+```
+
+To install this package as a library, if you have cloned the repository, run:
+
+```sh
+python3 -m pip install /path/to/repository
+```
+
+else, if you only desire the library, run:
+
+```sh
+pip install git+https://github.com/muse-writes/probLM-solver
+```
+
+### Docker
+
+The CLI itself can be run in a docker container for testing the program.
 
 To serve this app, run:
 
 ```sh
-docker compose up app
+docker-compose run app --build
 ```
 
 Within the Dev Container this is equivalent to:
@@ -79,5 +106,6 @@ The following development environments are supported:
 - Run `uv sync --upgrade` from within the development environment to upgrade all dependencies to the latest versions allowed by `pyproject.toml`. Add `--only-dev` to upgrade the development dependencies only.
 - Run `cz bump` to bump the app's version, update the `CHANGELOG.md`, and create a git tag. Then push the changes and the git tag with `git push origin main --tags`.
 - Run `poe mutmut` to analyse test coverage via mutation.
+- The library can be installed in editable mode using `python -m pip install -e .`.
 
 </details>
