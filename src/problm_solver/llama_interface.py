@@ -238,6 +238,18 @@ class ModelInstance:
         self._llm.load_state(state)
 
 
+### -- Tokens, formatting, and changing context -- ###
+
+    def change_context(self, ctx: str) -> None:
+        """Update the provided context.
+
+        Making this change requires resetting the Llama instance state.
+
+        :param ctx: New context string provided to the model.
+        """
+        self.context = ctx
+        self._llm.reset()
+
     def get_tokenizer(self) -> LlamaTokenizer:
         """Exposes a LlamaTokenizer backed by this model's vocabulary.
 
