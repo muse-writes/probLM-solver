@@ -11,7 +11,6 @@ from llama_cpp.llama_chat_format import Jinja2ChatFormatter
 
 from problm_solver.adjust_probs import AdjustFn, GenerationContext
 from problm_solver.analysis.probabilities import prob_of_token, sample_from_logprobs
-from problm_solver.analysis.tokenizer import LlamaTokenizer, TokenSequence
 from problm_solver.data import (
     Hyperparams,
     LLMNextTokenData,
@@ -227,16 +226,6 @@ class ModelInstance:
 
 ### -- Expose lower level Llama API -- ###
 
-    def reset_state(self) -> None:
-        """Reset model state. Low-level Llama API."""
-        self._llm.reset()
-
-
-    def eval_tokens(self, tokens: list[int]) -> None:
-        """Evaluate tokens. Low-level Llama API."""
-        self._llm.eval(tokens)
-
-
     def save_live_state(self) -> LlamaState:
         """Return LlamaState object."""
         return self._llm.save_state()
@@ -258,13 +247,6 @@ class ModelInstance:
         """
         self.context = ctx
         self._llm.reset()
-
-    def get_tokenizer(self) -> LlamaTokenizer:
-        """Exposes a LlamaTokenizer backed by this model's vocabulary.
-
-        :returns: The tokenizer instance, defined in ``problm_solver.analysis.tokenizer``.
-        """
-        return LlamaTokenizer(self._llm)
 
 
     def _format_chat_prompt(self) -> list[int]:
