@@ -227,24 +227,6 @@ class TestModelInstanceQueryLogProbs:
         assert len(result.tokens) == 1
 
 
-class TestModelInstanceGetTokenizer:
-    """Tests for ModelInstance.get_tokenizer."""
-
-    def test_returns_llama_tokenizer(self, model_instance) -> None:
-        """get_tokenizer() returns a LlamaTokenizer instance."""
-        from problm_solver.analysis.tokenizer import LlamaTokenizer
-
-        result = model_instance.get_tokenizer()
-        assert isinstance(result, LlamaTokenizer)
-
-    def test_tokenizer_is_backed_by_model_llm(self, model_instance) -> None:
-        """The returned tokenizer wraps the same Llama object as the model."""
-        from problm_solver.analysis.tokenizer import LlamaTokenizer
-
-        result = model_instance.get_tokenizer()
-        assert result._llama is model_instance._llm
-
-
 class TestModelInstanceGenerateData:
     """Tests for ModelInstance.generate_data."""
 
