@@ -19,6 +19,7 @@ from problm_solver.data import (
     LLMOutputDataFull,
     LLMTokenData,
 )
+from problm_solver.utils import _as_rng
 
 
 class ModelInstance:
@@ -67,7 +68,7 @@ class ModelInstance:
         return np.array([self.query() for _ in range(n)], dtype=str)
 
 
-    def query(self) -> str:
+    def query(self, rng: np.random.Generator | int | None = None) -> str:
         """Query the LLM once.
 
         :returns: the response string.
@@ -77,9 +78,10 @@ class ModelInstance:
         self._llm.reset()
         self._llm.eval(prompt_tokens)
         tokens = []
+        rng = _as_rng(rng)
         for _ in range(max_tokens):
             logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
-            next_id = int(np.argmax(logprobs + np.random.gumbel(size=len(logprobs))))
+            next_id = int(np.argmax(logprobs + rng.gumbel(size=len(logprobs))))
             if next_id == self._llm.token_eos():
                 break
             tokens.append(next_id)
@@ -97,7 +99,7 @@ class ModelInstance:
         return LLMOutputData(prompt=self.context, data=data)
 
 
-    def query_log_probs(self) -> LLMTokenData:
+    def query_log_probs(self, rng: np.random.Generator | int | None = None) -> LLMTokenData:
         """Query the model and return the response as tokens with probabilities.
 
         Evaluates the formatted prompt in a single forward pass, then samples
@@ -116,9 +118,10 @@ class ModelInstance:
         tokens: TokenSequence = []
         probs: list[float] = []
         eos_id = self._llm.token_eos()
+        rng = _as_rng(rng)
         for _ in range(max_tokens):
             logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
-            next_id = int(np.argmax(logprobs + np.random.gumbel(size=len(logprobs))))
+            next_id = int(np.argmax(logprobs + rng.gumbel(size=len(logprobs))))
             if next_id == eos_id:
                 break
             tokens.append(self._tokens_as_strings([next_id])[0])
@@ -159,7 +162,12 @@ class ModelInstance:
         )
 
 
-    def query_branch(self, context_tokens: list[int], max_tokens: int) -> float:
+    def query_branch(
+        self,
+        context_tokens: list[int],
+        max_tokens: int,
+        rng: np.random.Generator | int | None = None
+    ) -> float:
         """Generate a branch of up to max_tokens and return its total log-probability.
 
         Evaluates ``context_tokens`` in a single forward pass, then immediately
@@ -194,6 +202,7 @@ class ModelInstance:
 
         eos_id = self._llm.token_eos()
         total_log_prob = 0.0
+        rng = _as_rng(rng)
 
         for _ in range(max_tokens):
             # scores[n_tokens - 1] is the most recently decoded logit row,
@@ -203,7 +212,7 @@ class ModelInstance:
             # Gumbel-max trick: argmax(log p + Gumbel(0,1)) is equivalent to
             # drawing from categorical(softmax(log p)) without materialising
             # the full probability vector.
-            next_id = int(np.argmax(logprobs + np.random.gumbel(size=len(logprobs))))
+            next_id = int(np.argmax(logprobs + rng.gumbel(size=len(logprobs))))
 
             if next_id == eos_id:
                 break
