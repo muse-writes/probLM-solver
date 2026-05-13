@@ -54,6 +54,7 @@ class ModelInstance:
         self._cache = LlamaRAMCache(capacity_bytes=4 * bytes_per_state)
         self._llm.set_cache(self._cache)
         self.context = context
+        self._initial_context_length: int = len(self.context)
 
 
 ## -- Methods for querying the LLM. -- ##
@@ -247,6 +248,7 @@ class ModelInstance:
         """
         self.context = ctx
         self._llm.reset()
+        self._initial_context_length = len(self.context)
 
 
     def _format_chat_prompt(self) -> list[int]:
@@ -423,7 +425,7 @@ class ModelInstance:
 
 # Construct dataclass output.
         return LLMOutputDataFull(
-            context=self._tokens_as_strings(context),
+            context=self._tokens_as_strings(context[:self._initial_context_length]),
             hyperparams=Hyperparams(
                 alpha=alpha,
                 top_k=n_tokens,
