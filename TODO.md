@@ -2,12 +2,14 @@
 
 ## UI
 
+* Make saving and loading KV state silent, include progress tracking (less stdout waffle effectively). Could also look into logging/live-display of current tokens outputted in stdout.
+* Set up a config for the CLI. Location in which to search for .gguf files is easily handled in scripts, but when running the CLI entrypoint it's hard-coded in as `~/.problm-solver/models`.
 * Add support for loading `pytorch_model.bin` files, since they're frequently distributed on huggingface. Potentially add in-program support for quantising said models but Llama's own scripts are not too hard to use.
 * Investigate porting the API to R.
 
 ## Optimisation
 
-* Nothing right now.
+* Ensure consistent use of numpy where a speedup could be had, and ensure minimal type conversions.
 
 ## Infrastructure
 
