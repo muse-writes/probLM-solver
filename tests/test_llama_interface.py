@@ -348,7 +348,9 @@ class TestModelInstanceQueryBranch:
         lp2 = float(ModelInstance._log_softmax(
             np.array([0.5, 0.5, 2.0, 0.2, -2.0], dtype=np.float32)
         )[2])
-        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(self._VOCAB)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             result = branch_model.query_branch([10, 20, 30], max_tokens=2)
         assert result == pytest.approx(lp1 + lp2)
 

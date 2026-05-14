@@ -416,13 +416,13 @@ class ModelInstance:
                 ),
                 query_branch=self.query_branch,
                 tokenize_token=lambda s: self._llm.tokenize(
-                    s.encode('utf-8'), add_bos=False, special=False,
+                    s.encode('utf-8'), add_bos=False, special=True,
                 ),
             )
             adjusted = adjust_fn(ctx)
             token_str = sample_from_logprobs(adjusted)
             token_ids = self._llm.tokenize(
-                token_str.encode('utf-8'), add_bos=False, special=False,
+                token_str.encode('utf-8'), add_bos=False, special=True,
             )
 
 # Check for end, call eval() if continuing.
