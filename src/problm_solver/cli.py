@@ -1,5 +1,6 @@
 """Command line interface main loop contained here."""
 
+import logging
 from datetime import UTC, datetime
 from os.path import splitext
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 from problm_solver.adjust_probs import MetropolisSampler, SampleLowTemp, SamplePowerDist
 from problm_solver.data import LLMOutputData, LLMTokenData
 from problm_solver.llama_interface import ModelInstance
+from problm_solver.utils import TqdmHandler
 
 PROBLM_DIR = Path.home() / '.problm-solver'
 MODELS_DIR = PROBLM_DIR / 'models'
@@ -18,6 +20,12 @@ GEN_DATA = 1
 PROBS = 2
 LOW_TEMP = 3
 POWER_SAMPLING = 4
+
+logging.basicConfig(
+    handlers=[TqdmHandler()],
+    level=logging.DEBUG,
+    format='%(levelname)s - %(name)s - %(message)s',
+)
 
 
 class UnexpectedFunctionError(Exception):

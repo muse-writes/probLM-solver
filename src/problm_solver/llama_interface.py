@@ -1,6 +1,7 @@
 """llama.cpp python interface for running local models."""
 
 import copy
+import logging
 from inspect import isclass
 from typing import Any
 
@@ -8,6 +9,7 @@ import numpy as np
 import numpy.typing as npt
 from llama_cpp import Llama, LlamaRAMCache, LlamaState
 from llama_cpp.llama_chat_format import Jinja2ChatFormatter
+from tqdm import tqdm
 
 from problm_solver.adjust_probs import AdjustFn, GenerationContext
 from problm_solver.analysis.probabilities import prob_of_token, sample_from_logprobs
@@ -20,6 +22,14 @@ from problm_solver.data import (
 )
 from problm_solver.utils import _as_rng
 
+# -- Module-wide setup -- #
+
+_logger = logging.getLogger(__name__)
+
+ADEQUATE_TOPK = 30
+
+
+# -- Main model instance -- #
 
 class ModelInstance:
     """Keeps a model instance and its context, with methods for querying the Llama instance."""
@@ -42,7 +52,8 @@ class ModelInstance:
         :param context: query that the model is initialised with.
         :param logits_all: whether or not probability logging is necessary in the Llama instance.
         """
-        self._llm = Llama(model_path=fname, n_ctx=2048, logits_all=logits_all)
+        self._llm = Llama(model_path=fname, n_ctx=2048, logits_all=logits_all, verbose=False)
+        _logger.info('Model %r loaded.', fname)
 
         arch = self._llm.metadata['general.architecture']
         n_layers = int(self._llm.metadata[f'{arch}.block_count'])
@@ -373,6 +384,11 @@ class ModelInstance:
                 sampling_method = getattr(adjust_fn, '__name__', type(adjust_fn).__name__)
         if top_p is not None:
             raise NotImplementedError
+        _logger.info('Generation with adjusted probabilities started')
+        if n_tokens < ADEQUATE_TOPK:
+            _logger.warning(
+                'top-k set to %d < 30. Model may struggle to sample rare vocab.', n_tokens
+            )
 
 
 # Data storage variables setup.
@@ -388,7 +404,7 @@ class ModelInstance:
         self._llm.eval(context)
 
 # Main generation loop.
-        for _ in range(max_tokens):
+        for step in tqdm(range(max_tokens), desc='generate_adjusted', unit='tok'):
             logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
             top_k = self._top_k_from_logprobs(logprobs, n_tokens)
             ctx = GenerationContext(
@@ -416,12 +432,16 @@ class ModelInstance:
 
 # Assign various data variables for safekeeping.
             token_prob = float(prob_of_token(token_str, adjusted))
+            _logger.debug(
+                'step %d/%d -- Sampled %r (p=%.4f)', step + 1, max_tokens, token_str, token_prob
+            )
             prev_probs.append(token_prob)
             response_prob_tokens.append(token_str)
             response_prob_values.append(token_prob)
             response_topk_dists.append({k: float(v) for k, v in adjusted.items()})
             context.extend(token_ids)
 
+        _logger.info('Generation with adjusted probabilities complete.')
 
 # Construct dataclass output.
         return LLMOutputDataFull(

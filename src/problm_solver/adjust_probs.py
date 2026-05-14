@@ -1,5 +1,6 @@
 """Implement several adjustment functions for generate_adjusted."""
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -8,6 +9,10 @@ import numpy as np
 import numpy.typing as npt
 
 from problm_solver.utils import _as_rng
+
+# -- Module-wide setup -- #
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
