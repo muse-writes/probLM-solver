@@ -242,6 +242,8 @@ class TestBranchSampler:
                 return proposed_log_prob
             def should_continue(self, branch_log_probs) -> bool:
                 return False
+            def future_logprob(self, alpha, branch_log_probs) -> np.float64:
+                return np.float64(0.0)
 
         MinimalSampler().reset()  # must not raise
 
@@ -371,6 +373,7 @@ class TestSamplePowerDistCall:
         s = MagicMock(spec=BranchSampler)
         s.step.side_effect = lambda proposed_log_prob, **_: proposed_log_prob
         s.should_continue.return_value = False  # stop after the first branch
+        s.future_logprob.return_value = 0.0
         return s
 
     @pytest.fixture()

@@ -153,6 +153,10 @@ class BranchSampler(ABC):
         :returns: ``True`` to sample another proposal, ``False`` to stop.
         """
 
+    @abstractmethod
+    def future_logprob(self, alpha: float, branch_log_probs: npt.NDArray[np.float64]) -> np.float64:
+        """Calculate weighting to token probability from sampled branches."""
+
 
 class MetropolisSampler(BranchSampler):
     """Metropolis-Hastings sampler over complete branch proposals.
@@ -252,6 +256,13 @@ class MetropolisSampler(BranchSampler):
         sem = float(np.std(post_eq) / np.sqrt(len(post_eq)))
         return sem >= self._tolerance
 
+    def future_logprob(self, alpha: float, branch_log_probs: npt.NDArray[np.float64]) -> np.float64:
+        """Monte Carlo mean weight."""
+        post_eq = branch_log_probs[self._equil_branches:]
+        scaled = alpha * post_eq
+        max_lp = np.float64(scaled.max())
+        return np.log(np.mean(np.exp(scaled - max_lp))) + max_lp
+
 
 class SamplePowerDist:
     """Adjust token log-probabilities using future-branch power-distribution sampling.
@@ -339,12 +350,8 @@ class SamplePowerDist:
 
             branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
 
-# Combine via log-sum-exp over alpha-scaled branch log-probs
-            scaled = self.alpha * branch_log_probs
-            max_lp = scaled.max()
-            future_lp = float(
-                np.log(np.sum(np.exp(scaled - max_lp))) + max_lp
-            )
-            result[token] = self.alpha * log_prob + future_lp
+            future_lp = self.branch_sampler.future_logprob(self.alpha, branch_log_probs)
+            past_lp = self.alpha * np.sum(np.log(np.array(context.prev_probs, dtype=np.float64)))
+            result[token] = past_lp + self.alpha * log_prob + future_lp
 
         return result

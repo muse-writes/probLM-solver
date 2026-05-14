@@ -398,7 +398,7 @@ class ModelInstance:
                 query_next=lambda ctx_ids: (
                     self.query_log_probs_next_token(ctx_ids, n_tokens).top_k_tokens
                 ),
-                query_branch=lambda ctx_ids, depth: self.query_branch(ctx_ids, depth),
+                query_branch=self.query_branch,
                 tokenize_token=lambda s: self._llm.tokenize(
                     s.encode('utf-8'), add_bos=False, special=False,
                 ),
