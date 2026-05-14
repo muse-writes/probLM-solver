@@ -364,7 +364,6 @@ class SamplePowerDist:
             branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
 
             future_lp = self.branch_sampler.future_logprob(self.alpha, branch_log_probs)
-            past_lp = self.alpha * np.sum(np.log(np.array(context.prev_probs, dtype=np.float64)))
-            result[token] = past_lp + self.alpha * log_prob + future_lp
+            result[token] = self.alpha * log_prob + future_lp
 
         return result

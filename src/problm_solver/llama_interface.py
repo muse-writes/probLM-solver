@@ -416,10 +416,12 @@ class ModelInstance:
                 ),
                 query_branch=self.query_branch,
                 tokenize_token=lambda s: self._llm.tokenize(
-                    s.encode('utf-8'), add_bos=False, special=True,
+                    s.encode('utf-8'), add_bos=False, special=False,
                 ),
             )
+            pre_adjust_state = self.save_live_state()
             adjusted = adjust_fn(ctx)
+            self.load_live_state(pre_adjust_state)
             token_str = sample_from_logprobs(adjusted)
             token_ids = self._llm.tokenize(
                 token_str.encode('utf-8'), add_bos=False, special=True,
