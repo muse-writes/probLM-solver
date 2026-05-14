@@ -1,3 +1,17 @@
+## v1.3.0 (2026-05-14)
+
+### Feat
+
+- Added candidate token adjustment progress bar for SamplePowerDist
+- Silenced Llama output, added tqdm progress and logging.
+
+### Fix
+
+- Context is no longer garbled between adjust_fn calls.
+- Fixed decoder treating special characters as strings.
+- Power distribution now includes prior tokens.
+- **interface**: generate_adjusted now only writes the prompt in 'context'
+
 ## v1.2.0 (2026-05-14)
 
 ### Feat
