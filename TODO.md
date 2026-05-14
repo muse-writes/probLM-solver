@@ -20,6 +20,7 @@
 
 * Add support for top-p sampling techniques. Ideally these should be usable alongside custom sampling algorithms.
 * User specification for Llama API beam sampling? When using a custom sampling algorithm, I might have to reimplement beam sampling from first principles.
+* Support for testing on datasets like MATH500 (shouldn't be too hard via script, might be difficult via CLI).
 
 ## Fixes
 
