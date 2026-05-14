@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
+from tqdm import tqdm
 import numpy.typing as npt
 
 from problm_solver.utils import _as_rng
@@ -331,7 +332,14 @@ class SamplePowerDist:
         """
         result: dict[str, float] = {}
 
-        for token, log_prob in context.token_probs.items():
+        candidate_bar = tqdm(
+            context.token_probs.items(),
+            desc='candidates',
+            total=len(context.token_probs),
+            unit='tok',
+            leave=False,
+        )
+        for token, log_prob in candidate_bar:
             token_ids = context.tokenize_token(token)
             branch_ctx = list(context.context_tokens) + token_ids
             branch_log_probs_list: list[float] = []
