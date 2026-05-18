@@ -1,12 +1,12 @@
 ---
 name: report
-description: Summarises all code changes made since AGENT.md (or AGENTS.md) was last updated, presents the summary to the user, then updates the file. Use when the user asks for a report, a summary of recent changes, or asks to update AGENT.md/AGENTS.md.
+description: Summarises all code changes made since AGENT.md (or AGENTS.md) was last updated and presents the summary to the user. Use when the user asks for a report or a summary of recent changes.
 ---
 
 # Report
 
 Produce a summary of every code change made since the project's agent context file was last
-updated, present it to the user, then apply it to the file.
+updated and present it to the user. Do not modify AGENTS.md or any other file.
 
 ## Steps
 
@@ -41,17 +41,12 @@ git diff <hash>..HEAD -- src/ tests/ pyproject.toml
 
 If the file was never committed, use `git log --oneline` and `git diff HEAD -- src/ tests/ pyproject.toml`.
 
-### 4 — Read the current agent context file
-
-Use the `read` tool to load the full contents of AGENT.md / AGENTS.md. This is the baseline to
-update against.
-
-### 5 — Inspect changed source files
+### 4 — Inspect changed source files
 
 For any source or test file that appears in the diff, use `read` to load its current contents so
 the report is grounded in the actual code rather than just the diff text.
 
-### 6 — Produce the summary
+### 5 — Produce the summary
 
 Present the user with a clear prose summary structured as follows. Keep it concise.
 
@@ -65,22 +60,4 @@ out explicitly with a brief explanation of the root cause.
 **Outstanding issues** — note anything known to be incomplete, stubbed, or carrying active
 linter errors.
 
-### 7 — Confirm with the user before writing
-
-Ask: *"Would you like me to update AGENT.md with these changes?"* and wait for confirmation
-before proceeding to step 8. If the user declines, stop here.
-
-### 8 — Update the agent context file
-
-Apply all of the following that are relevant:
-
-- **Directory structure** — reflect any new or moved files
-- **Core modules** — update method signatures, add new methods/classes, remove deleted ones
-- **Architecture / dependency diagram** — update if imports or module relationships changed
-- **Data flow** — update if the runtime workflow changed
-- **Constants / functions lists** — keep in sync with the actual code
-- **Code Quality / Testing** — update test file list, mocking strategies, doctest notes
-- **Known Issues — Active** — add new issues discovered; update descriptions if partially fixed
-- **Known Issues — Resolved** — append one ✓ line per resolved issue; do not remove old entries
-
-Write the updated file with the `write` tool. Confirm to the user once done.
+Stop here. Do not modify any files.
