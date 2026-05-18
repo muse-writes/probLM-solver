@@ -2,7 +2,6 @@
 
 ## UI
 
-* Make saving and loading KV state silent, include progress tracking (less stdout waffle effectively). Could also look into logging/live-display of current tokens outputted in stdout.
 * Set up a config for the CLI. Location in which to search for .gguf files is easily handled in scripts, but when running the CLI entrypoint it's hard-coded in as `~/.problm-solver/models`.
 * Add support for loading `pytorch_model.bin` files, since they're frequently distributed on huggingface. Potentially add in-program support for quantising said models but Llama's own scripts are not too hard to use.
 * Investigate porting the API to R.
@@ -18,7 +17,6 @@
 
 ## Features
 
-* Add support for top-p sampling techniques. Ideally these should be usable alongside custom sampling algorithms.
 * User specification for Llama API beam sampling? When using a custom sampling algorithm, I might have to reimplement beam sampling from first principles.
 * Support for testing on datasets like MATH500 (shouldn't be too hard via script, might be difficult via CLI).
 
@@ -33,3 +31,6 @@
 * Llama can't use KV caching when performing low-temp or power distribution sampling. Could look into saving KV state into RAM before branch sampling and then returning to it after a token or block of tokens has been accepted.
 * `SamplePowerDist` doesn't presently include probabilities from past tokens, only future branches
 * `BranchSampler` really ought to implement its own logic for calculating future logprobs.
+* Make saving and loading KV state silent, include progress tracking (less stdout waffle effectively). Could also look into logging/live-display of current tokens outputted in stdout.
+* Investigate use of simultaneous top-p sampling, where one token is overwhelmingly likely to be chosen. Could have the sampler accumulate post-adjust probabilities and terminate upon reaching either top-p or top-k. This would cut down inference time for highly deterministic strings of tokens.
+* Add support for top-p sampling techniques. Ideally these should be usable alongside custom sampling algorithms.

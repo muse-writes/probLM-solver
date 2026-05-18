@@ -155,14 +155,8 @@ constants.py → (no intra-package deps)
 
 9. **`_written` comment indentation** (`data.py`): the inline comment `# Unsaved data state tracking variable.` before `_written` is at column 0 inside the `LLMOutputDataFull` class body; should be indented 4 spaces.
 
-10. **`query_next` lambda resets model state** (`llama_interface.py`): the `query_next` callable in `GenerationContext` is bound to `query_log_probs_next_token`, which calls `reset()` + `eval()` on the shared `_llm` instance. If an `adjust_fn` calls `query_next` during `generate_adjusted`, it will corrupt the incremental eval state that the generation loop depends on.
+10. **`query_next` lambda resets model state** (`llama_interface.py`): the `query_next` callable in `GenerationContext` is bound to `query_log_probs_next_token`, which calls `reset()` + `eval()` on the shared `_llm` instance. If an `adjust_fn` calls `query_next` during `generate_adjusted`, it will corrupt the incremental eval state that the generation loop depends on. The same issue applied to `query_branch` and is now resolved (see below), but `query_next` remains unfixed as `SamplePowerDist` does not currently use it.
 
 ---
 
 ## Known Issues — Resolved
-
-- ✓ `save_live_state()` missing return — `return self._llm.save_state()` added
-- ✓ `scores[-1]` wrong indexing — corrected to `scores[self._llm.n_tokens - 1]` throughout (`llama_cpp.Llama.eval` writes to `scores[n_past : n_past + n_tokens]`, so the last valid row is always `n_tokens - 1`)
-- ✓ Full migration from `create_completion` / `create_chat_completion` to low-level `eval` / `scores` / `save_state` / `load_state` API — `query`, `query_log_probs`, `query_log_probs_next_token`, `query_branch`, and `generate_adjusted` all migrated; two new private helpers added: `_log_softmax` and `_top_k_from_logprobs`
-- ✓ `LLMNextTokenData.top_m_tokens` renamed to `top_k_tokens` (constructor param, attribute, JSON key)
-- ✓ `GenerationContext.query_next` return type simplified — `| None` removed; EOS detection moved to caller
