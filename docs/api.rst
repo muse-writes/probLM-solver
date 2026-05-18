@@ -57,20 +57,6 @@ dictionaries returned by the model.
 
 ----
 
-Analysis — tokenizers
----------------------
-
-Tokenizer abstractions (:class:`~problm_solver.analysis.tokenizer.Tokenizer`,
-:class:`~problm_solver.analysis.tokenizer.WordTokenizer`,
-:class:`~problm_solver.analysis.tokenizer.LlamaTokenizer`) used when
-post-processing model outputs into token sequences.
-
-.. automodule:: problm_solver.analysis.tokenizer
-   :members:
-   :show-inheritance:
-
-----
-
 CLI
 ---
 

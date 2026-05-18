@@ -409,8 +409,8 @@ class ModelInstance:
             returns a modified ``dict[str, float]`` of token log-probabilities.
             Values do not need to be normalised.
         :param max_tokens: Maximum number of tokens to generate.
-        :returns: ``LLMOutputData`` containing the prompt and the generated
-            response string.
+        :returns: ``LLMOutputDataFull`` containing the model's response,
+            candidate tokens at each step, and logprobs.
         """
 # Hyperparam and sampling setup.
         if sampling_method is None:

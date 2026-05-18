@@ -34,7 +34,8 @@ A simple script for setting up a model, and generating a response with low-tempe
 
    sampling_func = SampleLowTemp(alpha=1./temp)
    data = model.generate_adjusted(
-       n_tokens=top_k,
+       top_k=top_k,
+       top_p=0.9,
        adjust_fn=sampling_func,
        max_tokens=128
    )
@@ -98,7 +99,8 @@ Let's start with the code snippet below. In this example we will be using the in
        branch_sampler=MetropolisSampler(equil_branches=5, max_branches=10)
    )
    data = model.generate_adjusted(
-       n_tokens=top_k,
+       top_k=top_k,
+       top_p=0.9,
        adjust_fn=sampling_func,
        max_tokens=128
    )
@@ -176,7 +178,7 @@ A user who has made the class ``MySampler``, can now pass it to an instance of `
 
    temp = 0.5
    sampling_func = SamplePowerDist(alpha=1./temp, lookahead_depth=10, branch_sampler=MySampler())
-   data = model.generate_adjusted(n_tokens=8, adjust_fn=sampling_func, max_tokens=128)
+   data = model.generate_adjusted(top_k=8, top_p=0.9, adjust_fn=sampling_func, max_tokens=128)
 
 Let's explore a hypothetical greedy branch sampler. It might be defined in the following way:
 
