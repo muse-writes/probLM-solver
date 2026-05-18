@@ -724,30 +724,30 @@ class TestGenerateAdjusted:
 
     def test_returns_llmoutputdatafull(self, gen_adj_model) -> None:
         """generate_adjusted() returns an LLMOutputDataFull instance."""
-        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
+        result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
         assert isinstance(result, LLMOutputDataFull)
 
     def test_context_is_list_of_strings(self, gen_adj_model) -> None:
         """context on the returned LLMOutputDataFull is a list of strings."""
-        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
+        result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
         assert isinstance(result.context, list)
         assert all(isinstance(s, str) for s in result.context)
 
     def test_written_flag_is_false(self, gen_adj_model) -> None:
         """Freshly generated data has _written=False."""
-        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
+        result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
         assert result._written is False
 
     def test_loops_exactly_max_tokens_times(self, gen_adj_model) -> None:
         """eval() is called once for the prompt then once per generated token."""
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=4)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=4)
         # 1 prompt eval + 4 token evals
         assert gen_adj_model._llm.eval.call_count == 5
 
     def test_adjust_fn_called_each_step(self, gen_adj_model) -> None:
         """adjust_fn is called once per generated token."""
         adjust_fn = MagicMock(return_value={' hello': -0.5})
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=3)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=3)
         assert adjust_fn.call_count == 3
 
     def test_adjust_fn_receives_top_k_tokens(self, gen_adj_model) -> None:
@@ -755,7 +755,7 @@ class TestGenerateAdjusted:
         from problm_solver.llama_interface import ModelInstance
 
         adjust_fn = MagicMock(return_value={' hello': -0.5})
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=1)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=1)
         ctx = adjust_fn.call_args[0][0]
         # scores[2] = [-10, 3, 1, 0.5]; top-2 are '<tok1>' and '<tok2>'
         lp = ModelInstance._log_softmax(np.array([-10.0, 3.0, 1.0, 0.5], dtype=np.float32))
@@ -764,14 +764,14 @@ class TestGenerateAdjusted:
     def test_adjust_fn_receives_empty_prev_probs_on_first_step(self, gen_adj_model) -> None:
         """adjust_fn receives a GenerationContext with empty prev_probs on the first step."""
         adjust_fn = MagicMock(return_value={' hello': -0.5})
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=1)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=1)
         ctx = adjust_fn.call_args_list[0][0][0]
         assert ctx.prev_probs == []
 
     def test_adjust_fn_receives_growing_prev_probs(self, gen_adj_model) -> None:
         """prev_probs grows by one entry per step, containing prob_of_token return values."""
         adjust_fn = MagicMock(return_value={' hello': -0.5})
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=3)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=3)
         # Step 1: prev_probs = []; step 2: [0.8]; step 3: [0.8, 0.8]
         assert adjust_fn.call_args_list[0][0][0].prev_probs == []
         assert adjust_fn.call_args_list[1][0][0].prev_probs == [0.8]
@@ -779,47 +779,47 @@ class TestGenerateAdjusted:
 
     def test_response_topk_tokens_are_sampled_tokens(self, gen_adj_model) -> None:
         """response_topk[0] contains the token strings chosen at each step."""
-        result = gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=2)
+        result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=2)
         assert result.response_topk[0] == [' hello', ' hello']
 
     def test_stops_early_on_eos_token(self, gen_adj_model) -> None:
         """The loop breaks before max_tokens when tokenize returns the EOS token ID."""
         gen_adj_model._llm.tokenize.return_value = [0]
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=10)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=10)
         # Only the prompt eval ran; no token eval because first sample was EOS
         assert gen_adj_model._llm.eval.call_count == 1
 
     def test_stops_early_on_empty_token_ids(self, gen_adj_model) -> None:
         """The loop breaks when tokenize returns an empty list for the sampled token."""
         gen_adj_model._llm.tokenize.return_value = []
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=10)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=10)
         assert gen_adj_model._llm.eval.call_count == 1
 
     def test_prev_probs_reset_between_calls(self, gen_adj_model) -> None:
         """prev_probs starts empty on every call to generate_adjusted, not carried over."""
         adjust_fn = MagicMock(return_value={' hello': -0.5})
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=2)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=2)
         gen_adj_model._llm.eval.reset_mock()
         adjust_fn.reset_mock()
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=adjust_fn, max_tokens=1)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=1)
         assert adjust_fn.call_args_list[0][0][0].prev_probs == []
 
     def test_eval_called_with_prompt_first(self, gen_adj_model) -> None:
         """The first eval() call in generate_adjusted receives the formatted prompt tokens."""
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=1)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=1)
         # context is a mutable list extended by token_ids, so check the leading prompt slice.
         first_call_args = gen_adj_model._llm.eval.call_args_list[0].args[0]
         assert first_call_args[:3] == [10, 20, 30]
 
     def test_eval_called_once_per_token_plus_prompt(self, gen_adj_model) -> None:
         """generate_adjusted uses incremental eval: once for the prompt then once per token."""
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
         # 1 prompt eval + 3 token evals = 4 total
         assert gen_adj_model._llm.eval.call_count == 4
 
     def test_single_token_eval_per_step(self, gen_adj_model) -> None:
         """Each per-token eval() call passes exactly the new token IDs, not the full context."""
-        gen_adj_model.generate_adjusted(n_tokens=2, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=2)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=2)
         # Call 0 is the prompt; calls 1+ are single-token evals
         for token_call in gen_adj_model._llm.eval.call_args_list[1:]:
             assert token_call == call([42])  # tokenize() returns [42]

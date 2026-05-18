@@ -27,6 +27,7 @@ from problm_solver.utils import _as_rng
 _logger = logging.getLogger(__name__)
 
 ADEQUATE_TOPK = 30
+ADEQUATE_TOPP = 0.8
 
 
 # -- Main model instance -- #
@@ -344,31 +345,66 @@ class ModelInstance:
         top_indices = np.argpartition(logprobs, -n)[-n:]
         top_indices = top_indices[np.argsort(logprobs[top_indices])[::-1]]
         token_strings = self._tokens_as_strings(top_indices.tolist())
-        return {s: float(logprobs[idx]) for s, idx in zip(token_strings, top_indices)}
+        return {s: float(logprobs[idx]) for s, idx in zip(token_strings, top_indices, strict=True)}
+
+
+    def _candidates_from_logprobs(
+        self,
+        logprobs: npt.NDArray[np.float64],
+        top_k: int,
+        top_p: float
+    ) -> dict[str, float]:
+        """Return the most probable tokens using top-k and top-p params from the vocabulary.
+
+        Similar to ``_top_k_from_logprobs`` but after acquiring the top-k log-probabilities, it
+        only returns the smallest number of tokens whose probabilities sum to more than top-p.
+        If there are more than ``top_k`` tokens required to make up the ``top_p`` probabilities, it
+        just returns all top-k tokens.
+
+        :param logprobs: 1-D log-probability array over the full vocabulary,
+            as returned by :meth:`_log_softmax`.
+        :param top_k: Number of top candidates to return.
+        :param top_p: Total probability of candidate tokens.
+        :returns: ``{token_string: log_prob}`` for the *n* most probable
+            tokens, ordered from highest to lowest log-probability.
+        """
+        top_k = min(top_k, len(logprobs))
+        top_indices = np.argpartition(logprobs, -top_k)[-top_k:]
+        top_indices = top_indices[np.argsort(logprobs[top_indices])[::-1]]
+        token_strings = self._tokens_as_strings(top_indices.tolist())
+        tokens_out = {}
+        total_prob = 0
+        for s, idx in zip(token_strings, top_indices, strict=True):
+            tokens_out[s] = float(logprobs[idx])
+            total_prob += np.exp(logprobs[idx])
+            if total_prob > top_p:
+                break
+        return tokens_out
 
 
 ## -- Adjusting probabilities -- ##
 
     def generate_adjusted(
         self,
-        n_tokens: int,
+        top_k: int,
+        top_p: float,
         adjust_fn: AdjustFn,
         max_tokens: int,
         *,
         alpha: float = 1.0,
-        top_p: int | None = None, # Stub, kinda. Big TODO(Clio).
         sampling_method: str | None = None,
         branch_sampler: str | None = None,
     ) -> LLMOutputDataFull:
         """Generate a response token-by-token with adjusted next-token probabilities.
 
-        At each step the top ``n_tokens`` candidate next tokens are retrieved
+        At each step the top ``top_k`` candidate next tokens are retrieved
         and passed to ``adjust_fn``, which may modify the log-probability
         distribution. A single token is then sampled from the adjusted
         distribution and appended to the context before the next step.
 
-        :param n_tokens: Number of top candidate tokens to retrieve at each
-            step (M).
+        :param top_k: Number of top candidate tokens to retrieve at each
+            step.
+        :param top_p: Threshold total probability of retrieved tokens.
         :param adjust_fn: Callable that receives a ``GenerationContext`` and
             returns a modified ``dict[str, float]`` of token log-probabilities.
             Values do not need to be normalised.
@@ -376,18 +412,30 @@ class ModelInstance:
         :returns: ``LLMOutputData`` containing the prompt and the generated
             response string.
         """
-# Hyperparam setup.
+# Hyperparam and sampling setup.
         if sampling_method is None:
             if isclass(adjust_fn):
                 sampling_method = adjust_fn.__class__.__name__
             else:
                 sampling_method = getattr(adjust_fn, '__name__', type(adjust_fn).__name__)
-        if top_p is not None:
-            raise NotImplementedError
+        if top_p >= 1.:
+            candidate_generator = self._top_k_from_logprobs
+        elif top_p > 0.:
+            def candidate_generator(logprobs: npt.NDArray[np.float64], top_k: int) -> dict[str, float]:
+                return self._candidates_from_logprobs(logprobs, top_k, top_p)
+        else:
+            msg = f'top_p must be in (0, 1], got {top_p}'
+            raise ValueError(msg)
+
+# Parameter warnings.
         _logger.info('Generation with adjusted probabilities started')
-        if n_tokens < ADEQUATE_TOPK:
+        if top_k < ADEQUATE_TOPK:
             _logger.warning(
-                'top-k set to %d < 30. Model may struggle to sample rare vocab.', n_tokens
+                'top-k set to %d < 30. Model may struggle to sample rare vocab.', top_k
+            )
+        if top_p < ADEQUATE_TOPP:
+            _logger.warning(
+                'top-p set to %.4f < 0.8. Model may act excessively greedy.', top_p
             )
 
 
@@ -406,13 +454,13 @@ class ModelInstance:
 # Main generation loop.
         for step in tqdm(range(max_tokens), desc='generate_adjusted', unit='tok'):
             logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
-            top_k = self._top_k_from_logprobs(logprobs, n_tokens)
+            top_k_lp = candidate_generator(logprobs, top_k)
             ctx = GenerationContext(
-                token_probs=top_k,
+                token_probs=top_k_lp,
                 prev_probs=list(prev_probs),
                 context_tokens=list(context),
                 query_next=lambda ctx_ids: (
-                    self.query_log_probs_next_token(ctx_ids, n_tokens).top_k_tokens
+                    self.query_log_probs_next_token(ctx_ids, top_k).top_k_tokens
                 ),
                 query_branch=self.query_branch,
                 tokenize_token=lambda s: self._llm.tokenize(
@@ -450,7 +498,7 @@ class ModelInstance:
             context=self._tokens_as_strings(context[:self._initial_context_length]),
             hyperparams=Hyperparams(
                 alpha=alpha,
-                top_k=n_tokens,
+                top_k=top_k,
                 top_p=top_p,
                 max_tokens=max_tokens,
             ),

@@ -6,8 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
-from tqdm import tqdm
 import numpy.typing as npt
+from tqdm import tqdm
 
 from problm_solver.utils import _as_rng
 

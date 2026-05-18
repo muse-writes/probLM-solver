@@ -179,7 +179,8 @@ def ui_generate_low_temp(model: ModelInstance, model_path: Path) -> None:
     ))
     max_tokens = int(input('Please input the maximum number of response tokens: '))
     data = model.generate_adjusted(
-        n_tokens=top_k,
+        top_k=top_k,
+        top_p=0.9,
         adjust_fn=sampling_fn,
         max_tokens=max_tokens,
         alpha=alpha
@@ -212,7 +213,8 @@ def ui_generate_power_mcmc(model: ModelInstance, model_path: Path) -> None:
         branch_sampler=MetropolisSampler(max_branches=10)
     )
     data = model.generate_adjusted(
-        n_tokens=top_k,
+        top_k=top_k,
+        top_p=0.9,
         adjust_fn=sampling_fn,
         max_tokens=max_tokens,
         alpha=alpha,
