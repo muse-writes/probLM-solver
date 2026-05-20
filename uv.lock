@@ -923,6 +923,7 @@ dependencies = [
     { name = "llama-cpp-python" },
     { name = "numpy" },
     { name = "poethepoet" },
+    { name = "tqdm" },
 ]
 
 [package.dev-dependencies]
@@ -952,6 +953,7 @@ requires-dist = [
     { name = "llama-cpp-python" },
     { name = "numpy" },
     { name = "poethepoet" },
+    { name = "tqdm", specifier = ">=4.67.3" },
 ]
 
 [package.metadata.requires-dev]
