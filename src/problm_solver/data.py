@@ -179,7 +179,7 @@ class Hyperparams:
 
     alpha: float
     top_k: int | None
-    top_p: int | None
+    top_p: float | None
     max_tokens: int
 
 
