@@ -14,6 +14,7 @@
 
 * Add support for optional CUDA use
     * Add support for HPC runs (using slurm)
+* `huggingface_hub` etc. should be optional dependencies, and if the user doesn't want them but does want to use MATH500 or other datasets, they will have to point the program towards downloaded `.jsonl` or `.csv` files to import with pandas.
 
 ## Features
 

@@ -5,8 +5,16 @@ from datetime import UTC, datetime
 from os.path import splitext
 from pathlib import Path
 
-from problm_solver.adjust_probs import MetropolisSampler, SampleLowTemp, SamplePowerDist
-from problm_solver.data import LLMOutputData, LLMTokenData
+import pandas as pd
+
+from problm_solver.adjust_probs import (
+    MetropolisSampler,
+    SampleLowTemp,
+    SamplePowerDist,
+    adjust_identity,
+)
+from problm_solver.data import LLMOutputData, LLMOutputDataFull, LLMTokenData
+from problm_solver.datasets import get_math500, get_problems_math500
 from problm_solver.llama_interface import ModelInstance
 from problm_solver.utils import TqdmHandler
 
@@ -15,11 +23,12 @@ MODELS_DIR = PROBLM_DIR / 'models'
 RESPONSES_DIR = PROBLM_DIR / 'datasets' / 'responses'
 PROBS_DIR = PROBLM_DIR / 'datasets' / 'probabilities'
 
-NUMBER_OF_FUNCTIONS = 4
+NUMBER_OF_FUNCTIONS = 5
 GEN_DATA = 1
 PROBS = 2
 LOW_TEMP = 3
 POWER_SAMPLING = 4
+MATH500 = 5
 
 logging.basicConfig(
     handlers=[TqdmHandler()],
@@ -79,6 +88,12 @@ def get_probs_path(model_path: Path) -> Path:
     return PROBS_DIR / ('prob_' + splitext(model_path.name)[0] + '_' + timestamp + '.json')
 
 
+def get_math500_results_path(model_path: Path) -> Path:
+    """Return a timestamped .jsonl path inside RESPONSES_DIR for a MATH500 results dataset."""
+    timestamp = datetime.now(tz=UTC).strftime('%Y-%m-%d-%H:%M:%S')
+    return RESPONSES_DIR / ('math500_' + splitext(model_path.name)[0] + '_' + timestamp + '.jsonl')
+
+
 def ui_select_model() -> Path:
     """Display available GGUF models and prompt the user to pick one."""
     models = list_models()
@@ -114,7 +129,7 @@ def ui_gen_data(model: ModelInstance, model_path: Path) -> None:
     ui_save_data(str(data_path), data)
 
 
-def ui_save_data(fname: str, data: LLMOutputData) -> None:
+def ui_save_data(fname: str, data: LLMOutputData | LLMOutputDataFull) -> None:
     """Handle user interface for saving LLM response data."""
     resolved = False
     while not resolved:
@@ -162,6 +177,7 @@ def ui_select_function() -> int:
     print('  [2] Get tokens and probabilities (probs run)')
     print('  [3] Generate a response with low-temp sampling (low_temp run)')
     print('  [4] Generate a response with MCMC power sampling (power_mcmc run)')
+    print('  [5] Discard the context and generate answers to MATH500 (math500 run)')
     while True:
         choice = input(f'\nSelect a function (1-{NUMBER_OF_FUNCTIONS}): ').strip()
         if choice.isdigit() and 1 <= int(choice) <= NUMBER_OF_FUNCTIONS:
@@ -202,7 +218,7 @@ def ui_generate_power_mcmc(model: ModelInstance, model_path: Path) -> None:
         'as an integer: '
     ))
     top_k = int(input(
-        'Please input the number of most probable token candidates (M) to consider at each step: '
+        'Please input the number of most probable token candidates (K) to consider at each step: '
     ))
     max_tokens = int(input('Please input the maximum number of response tokens: '))
 
@@ -227,6 +243,51 @@ def ui_generate_power_mcmc(model: ModelInstance, model_path: Path) -> None:
     ui_save_data(str(response_path), data)
 
 
+def ui_math500(model: ModelInstance, model_path: Path) -> None:
+    """Answer MATH500 problems and write response to file."""
+    math500_data = get_math500()
+    math500_problems = get_problems_math500()
+
+    print('For MATH500 runs, temporarily using hard-coded parameters.')
+
+    sampling_fn = SamplePowerDist(
+        alpha=2.0,
+        lookahead_depth=20,
+        branch_sampler=MetropolisSampler(max_branches=10)
+    )
+
+    results = model.test_dataset_adjusted(
+        dataset=math500_problems,
+        top_k=30,
+        top_p=0.9,
+        adjust_fn=sampling_fn,
+        max_tokens=512
+    )
+
+    control = model.test_dataset_adjusted(
+        dataset=math500_problems,
+        top_k=30,
+        top_p=0.9,
+        adjust_fn=adjust_identity,
+        max_tokens=512
+    )
+
+# Combine into a DataFrame alongside the original dataset columns.
+    df = math500_data.copy()
+    df['power_dist_answer'] = results
+    df['control_answer'] = control
+
+# Prompt and save.
+    results_path = get_math500_results_path(model_path)
+    ensure_responses_dir()
+    response = input(f'Save results to {results_path}? Y/n : ').strip()
+    if response.lower() != 'n':
+        df.to_json(results_path, orient='records', lines=True)
+        print(f'Results saved to {results_path}.')
+    else:
+        print('Results discarded.')
+
+
 def main() -> None:
     """Perform main CLI."""
     ensure_models_dir()
@@ -238,7 +299,7 @@ def main() -> None:
         raise SystemExit(1)
 
     choice = ui_select_function()
-    use_logits: bool = choice in (PROBS, LOW_TEMP, POWER_SAMPLING)
+    use_logits: bool = choice in (PROBS, LOW_TEMP, POWER_SAMPLING, MATH500)
     model = ModelInstance(str(model_path), context, logits_all=use_logits)
 
     match choice:
@@ -250,6 +311,8 @@ def main() -> None:
             ui_generate_low_temp(model, model_path)
         case 4:
             ui_generate_power_mcmc(model, model_path)
+        case 5:
+            ui_math500(model, model_path)
         case _:
             raise UnexpectedFunctionError
 

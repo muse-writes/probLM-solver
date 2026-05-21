@@ -507,3 +507,25 @@ class ModelInstance:
             sampling_method=sampling_method,
             branch_sampler=branch_sampler
         )
+
+
+## -- Testing on datasets -- ##
+
+    def test_dataset_adjusted(
+        self,
+        dataset: list[str],
+        top_k: int,
+        top_p: float,
+        adjust_fn: AdjustFn,
+        max_tokens: int
+    ) -> list[str]:
+        """Generate answers to a series of questions in a provided dataset."""
+        answers = []
+        n_problems = len(dataset)
+        for ii in tqdm(range(n_problems), desc='dataset_progress', unit='problem'):
+            problem = dataset[ii]
+            self.change_context(problem)
+            out = self.generate_adjusted(top_k, top_p, adjust_fn, max_tokens)
+            answers.append(''.join(out.response_probabilities[0]))
+            _logger.info('Completed problem: %d/%d', ii + 1, n_problems)
+        return answers

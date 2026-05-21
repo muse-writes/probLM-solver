@@ -119,7 +119,7 @@ class BranchSampler(ABC):
     to keep proposing additional branches.
     """
 
-    def reset(self) -> None:
+    def reset(self) -> None: # noqa: B027
         """Reset internal state at the start of each candidate-token chain.
 
         No-op for stateless samplers. Stateful samplers (e.g.
@@ -188,7 +188,6 @@ class MetropolisSampler(BranchSampler):
         self,
         equil_branches: int = 5,
         max_branches: int = 30,
-# TODO(Clio): Investigate viable convergence tolerances.
         tolerance: float = 1e-1,
         rng: np.random.Generator | int | None = None
     ) -> None:
