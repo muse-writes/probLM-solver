@@ -246,20 +246,7 @@ class MetropolisSampler(BranchSampler):
 
         :param: branch logarithmic probabilities to date.
         """
-        n = len(branch_log_probs)
-        if n < self._equil_branches:
-            return True
-        if n >= self._max_branches:
-            return False
-# TODO(Clio): Write proper equilibration algorithm?? Allow input control?
-# Discard equilibration probabilities in SEM calculation.
-# set to > equil_branches a.t.m.
-# Noise in probabilities is likely to be quite high, think more about this.
-        post_eq = branch_log_probs[self._equil_branches:]
-        if len(post_eq) <= 1:
-            return True
-        sem = float(np.std(post_eq) / np.sqrt(len(post_eq)))
-        return sem >= self._tolerance
+        return len(branch_log_probs) < self._max_branches
 
     def future_logprob(self, alpha: float, branch_log_probs: npt.NDArray[np.float64]) -> np.float64:
         """Monte Carlo mean weight."""
