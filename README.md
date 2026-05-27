@@ -31,6 +31,21 @@ else, if you only desire the library, run:
 pip install git+https://github.com/muse-writes/probLM-solver
 ```
 
+### Conda
+
+An `environment.yml` is provided for conda users (Miniforge, Miniconda, or Anaconda). To create and activate the environment, run:
+
+```sh
+conda env create -f environment.yml
+conda activate problm-solver
+```
+
+If you have an NVIDIA GPU and want hardware-accelerated inference, reinstall `llama-cpp-python` with CUDA support after activating the environment:
+
+```sh
+CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --force-reinstall
+```
+
 ### Docker
 
 The CLI itself can be run in a docker container for testing the program.

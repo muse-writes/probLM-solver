@@ -8,5 +8,5 @@ dependencies:
   - poethepoet
   - pip
   - pip:
-      - llama-cpp-python
-      - -e .
+    - llama-cpp-python
+    - .
