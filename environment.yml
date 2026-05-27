@@ -1,0 +1,12 @@
+name: problm-solver
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - numpy
+  - tqdm
+  - poethepoet
+  - pip
+  - pip:
+      - llama-cpp-python
+      - -e .

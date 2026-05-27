@@ -169,6 +169,10 @@ type = "virtualenv"
   help = "Run mutation tests"
   cmd = "mutmut run"
 
+  [tool.poe.tasks.conda]
+  help = "Create the conda environment."
+  cmd = "conda env create -f environment.yml"
+
   [tool.poe.tasks.test]
   help = "Test this app"
 
