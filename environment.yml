@@ -6,7 +6,10 @@ dependencies:
   - numpy
   - tqdm
   - poethepoet
+  - llama-cpp-python
+  - pandas
+  - fsspec
+  - huggingface_hub
   - pip
   - pip:
-    - llama-cpp-python
     - .
