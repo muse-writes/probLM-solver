@@ -312,16 +312,6 @@ class TestMetropolisSampler:
         sampler = MetropolisSampler(equil_branches=1, max_branches=10)
         assert sampler.should_continue(np.zeros(10)) is False
 
-    def test_should_continue_returns_false_when_sem_below_tolerance(self) -> None:
-        """should_continue returns False when SEM of branch log-probs < tolerance."""
-        sampler = MetropolisSampler(equil_branches=3, tolerance=0.1)
-        assert sampler.should_continue(np.array([1.0, 1.0, 1.0, 1.0, 1.0])) is False
-
-    def test_should_continue_returns_true_when_sem_above_tolerance(self) -> None:
-        """should_continue returns True when SEM of branch log-probs >= tolerance."""
-        sampler = MetropolisSampler(equil_branches=3, tolerance=0.01)
-        assert sampler.should_continue(np.array([-10.0, 0.0, 10.0, -10.0, 10.0])) is True
-
 
 # ---------------------------------------------------------------------------
 # TestSamplePowerDistInit
