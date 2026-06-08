@@ -227,6 +227,33 @@ class TestSampleLowTempCall:
         )
         assert SampleLowTemp(alpha=1)(ctx) != SampleLowTemp(alpha=3)(ctx)
 
+    def test_matches_exact_power_scaling_without_history(self) -> None:
+        """With empty history, output equals log(exp(lp-lp_max) ** alpha)."""
+        ctx = GenerationContext(
+            token_probs={' a': -0.2, ' b': -1.2},
+            prev_probs=[],
+            context_tokens=[],
+            query_next=MagicMock(),
+            query_branch=MagicMock(),
+            tokenize_token=MagicMock(),
+        )
+        out = SampleLowTemp(alpha=2.0)(ctx)
+        assert out == pytest.approx({' a': 0.0, ' b': -2.0})
+
+    def test_matches_exact_power_scaling_with_history_factor(self) -> None:
+        """History contributes a constant log(prod(prev_probs ** alpha)) shift."""
+        ctx = GenerationContext(
+            token_probs={' a': -0.2, ' b': -1.2},
+            prev_probs=[0.5],
+            context_tokens=[],
+            query_next=MagicMock(),
+            query_branch=MagicMock(),
+            tokenize_token=MagicMock(),
+        )
+        out = SampleLowTemp(alpha=2.0)(ctx)
+        expected_shift = float(np.log(0.5 ** 2))
+        assert out == pytest.approx({' a': expected_shift, ' b': expected_shift - 2.0})
+
 
 # ---------------------------------------------------------------------------
 # TestBranchSampler
@@ -311,6 +338,50 @@ class TestMetropolisSampler:
         """should_continue returns False when max_branches is reached."""
         sampler = MetropolisSampler(equil_branches=1, max_branches=10)
         assert sampler.should_continue(np.zeros(10)) is False
+
+    def test_init_sets_defaults_and_seeded_rng(self) -> None:
+        """__init__ stores defaults and seeds Generator deterministically."""
+        sampler = MetropolisSampler(rng=123)
+        assert sampler._equil_branches == 5
+        assert sampler._max_branches == 30
+        assert sampler._tolerance == pytest.approx(1e-1)
+        expected_first = np.random.default_rng(123).random()
+        assert sampler._rng.random() == pytest.approx(expected_first)
+
+    def test_step_rejects_when_uniform_draw_above_acceptance_threshold(self) -> None:
+        """Proposal is rejected when log(u) exceeds min(0, log_accept_ratio)."""
+        sampler = MetropolisSampler()
+        sampler._current_log_prob = -1.0
+        sampler._rng = MagicMock(random=MagicMock(return_value=0.9))
+
+        accepted = sampler.step(proposed_log_prob=-2.0, alpha=2.0)
+
+        assert accepted == pytest.approx(-1.0)
+        assert sampler._current_log_prob == pytest.approx(-1.0)
+
+    def test_step_accepts_when_uniform_draw_below_acceptance_threshold(self) -> None:
+        """Proposal is accepted when log(u) is below min(0, log_accept_ratio)."""
+        sampler = MetropolisSampler()
+        sampler._current_log_prob = -1.0
+        sampler._rng = MagicMock(random=MagicMock(return_value=0.1))
+
+        accepted = sampler.step(proposed_log_prob=-2.0, alpha=2.0)
+
+        assert accepted == pytest.approx(-2.0)
+        assert sampler._current_log_prob == pytest.approx(-2.0)
+
+    def test_future_logprob_uses_post_equilibration_slice_exactly(self) -> None:
+        """future_logprob() computes log-mean-exp over branch_log_probs[equil_branches:]."""
+        sampler = MetropolisSampler(equil_branches=2)
+        branch_log_probs = np.array([-10.0, -9.0, -2.0, -1.0], dtype=np.float64)
+
+        result = sampler.future_logprob(alpha=2.0, branch_log_probs=branch_log_probs)
+
+        post_eq = np.array([-2.0, -1.0], dtype=np.float64)
+        scaled = 2.0 * post_eq
+        max_lp = scaled.max()
+        expected = np.log(np.mean(np.exp(scaled - max_lp))) + max_lp
+        assert result == pytest.approx(expected)
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +546,37 @@ class TestSamplePowerDistCall:
         args, _ = ctx.query_branch.call_args
         assert args[1] == 4
 
+    def test_branch_loop_has_runaway_guard(self) -> None:
+        """Guard fails fast if branch sampling runs beyond expected iterations."""
+        mock_sampler = MagicMock(spec=BranchSampler)
+        mock_sampler.step.side_effect = lambda proposed_log_prob, **_: proposed_log_prob
+        # For each candidate token: run exactly 2 branches, then stop.
+        mock_sampler.should_continue.side_effect = [True, False, True, False]
+        mock_sampler.future_logprob.return_value = 0.0
 
+        query_calls = 0
+
+        def guarded_query_branch(*_: object) -> float:
+            nonlocal query_calls
+            query_calls += 1
+            if query_calls > 4:
+                msg = 'runaway branch loop detected'
+                raise AssertionError(msg)
+            return -1.0
+
+        ctx = GenerationContext(
+            token_probs={' hello': -0.5, ' world': -1.2},
+            prev_probs=[],
+            context_tokens=[1],
+            query_next=MagicMock(),
+            query_branch=MagicMock(side_effect=guarded_query_branch),
+            tokenize_token=MagicMock(return_value=[99]),
+        )
+
+        spd = SamplePowerDist(alpha=1.0, lookahead_depth=2, branch_sampler=mock_sampler)
+        spd(ctx)
+
+        assert query_calls == 4
 
 
 # ---------------------------------------------------------------------------

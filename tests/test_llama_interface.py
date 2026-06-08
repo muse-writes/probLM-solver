@@ -810,3 +810,40 @@ class TestGenerateAdjusted:
         # Call 0 is the prompt; calls 1+ are single-token evals
         for token_call in gen_adj_model._llm.eval.call_args_list[1:]:
             assert token_call == call([42])  # tokenize() returns [42]
+
+    def test_max_tokens_zero_skips_generation_steps(self, gen_adj_model) -> None:
+        """With max_tokens=0, no generation step runs and adjust_fn is never called."""
+        adjust_fn = MagicMock(return_value={' hello': -0.5})
+
+        gen_adj_model.generate_adjusted(
+            top_k=2,
+            top_p=1.0,
+            adjust_fn=adjust_fn,
+            max_tokens=0,
+        )
+
+        adjust_fn.assert_not_called()
+        gen_adj_model._llm.eval.assert_called_once()  # prompt eval only
+
+    def test_generation_loop_has_runaway_guard(self, gen_adj_model) -> None:
+        """A guard catches accidental infinite-loop mutants quickly."""
+        max_tokens = 3
+        sample_calls = 0
+
+        def guarded_sample(_: dict[str, float]) -> str:
+            nonlocal sample_calls
+            sample_calls += 1
+            if sample_calls > max_tokens:
+                msg = 'runaway loop: sampled more than max_tokens'
+                raise AssertionError(msg)
+            return ' hello'
+
+        with patch('problm_solver.llama_interface.sample_from_logprobs', side_effect=guarded_sample):
+            gen_adj_model.generate_adjusted(
+                top_k=2,
+                top_p=1.0,
+                adjust_fn=lambda ctx: ctx.token_probs,
+                max_tokens=max_tokens,
+            )
+
+        assert sample_calls == max_tokens
