@@ -113,11 +113,12 @@ class SampleLowTemp:
 class BranchSampler(ABC):
     """Abstract base class for branch-level sampling strategies.
 
-    A ``BranchSampler`` runs a Markov chain over complete branch proposals.
-    :meth:`step` receives a proposed branch log-probability and returns the
-    chain state after accept/reject. :meth:`should_continue` decides whether
-    to keep proposing additional branches.
+    A ``BranchSampler`` typically runs over complete branch proposals. Some
+    subclasses may additionally provide token-by-token beam expansion via
+    :meth:`future_logprob_from_context`.
     """
+
+    supports_token_beam = False
 
     def reset(self) -> None: # noqa: B027
         """Reset internal state at the start of each candidate-token chain.
@@ -134,34 +135,30 @@ class BranchSampler(ABC):
         forward_log_q: float = 0.0,
         reverse_log_q: float = 0.0,
     ) -> float:
-        """Process one proposed branch and return the accepted chain state.
-
-        :param proposed_log_prob: Log-probability of the proposed branch under
-            the base model.
-        :param alpha: Power-distribution exponent. The acceptance ratio targets
-            ``π(x) ∝ p(x)^α``, so the ratio is computed as
-            ``(α-1) * (log p(x') - log p(x)) + log q(x|x') - log q(x'|x)``.
-        :param forward_log_q: Log proposal probability ``log q(x'|x)``.
-        :param reverse_log_q: Log reverse proposal probability ``log q(x|x')``.
-        :returns: The current chain state's branch log-probability after
-            accept/reject.
-        """
+        """Process one proposed branch and return the accepted chain state."""
 
     @abstractmethod
     def should_continue(self, branch_log_probs: npt.NDArray[np.float64]) -> bool:
-        """Return ``True`` if more branch proposals should be sampled.
-
-        Called after each completed MCMC step with all accepted branch
-        log-probabilities so far.
-
-        :param branch_log_probs: 1-D array of accepted branch log-probabilities
-            from all completed steps.
-        :returns: ``True`` to sample another proposal, ``False`` to stop.
-        """
+        """Return ``True`` if more branch proposals should be sampled."""
 
     @abstractmethod
     def future_logprob(self, alpha: float, branch_log_probs: npt.NDArray[np.float64]) -> np.float64:
         """Calculate weighting to token probability from sampled branches."""
+
+    def future_logprob_from_context(
+        self,
+        alpha: float,
+        branch_ctx: list[int],
+        lookahead_depth: int,
+        query_next: Callable[[list[int]], dict[str, float]],
+        tokenize_token: Callable[[str], list[int]],
+    ) -> np.float64:
+        """Optional token-by-token beam expansion hook.
+
+        Subclasses that implement token-level beam search should override this
+        method and set ``supports_token_beam = True``.
+        """
+        raise NotImplementedError
 
 
 class MetropolisSampler(BranchSampler):
@@ -256,6 +253,107 @@ class MetropolisSampler(BranchSampler):
         return np.log(np.mean(np.exp(scaled - max_lp))) + max_lp
 
 
+class BeamSampler(BranchSampler):
+    """Token-by-token beam expansion for future-branch scoring.
+
+    This sampler performs deterministic beam search over lookahead tokens.
+    For each candidate token, it repeatedly expands active beams using
+    ``query_next`` and keeps only the top ``beam_width`` cumulative
+    log-probability branches at every depth.
+
+    :param beam_width: Number of active beams retained per depth.
+    :param branch_top_k: Number of next-token candidates considered for each
+        active beam during expansion.
+    """
+
+    supports_token_beam = True
+
+    def __init__(self, beam_width: int = 3, branch_top_k: int = 5) -> None:
+        """Initialise beam-search width and per-beam expansion width."""
+        if beam_width < 1:
+            msg = f'beam_width must be >= 1, got {beam_width}'
+            raise ValueError(msg)
+        if branch_top_k < 1:
+            msg = f'branch_top_k must be >= 1, got {branch_top_k}'
+            raise ValueError(msg)
+
+        self.beam_width = beam_width
+        self.branch_top_k = branch_top_k
+
+    def reset(self) -> None:
+        """No-op: beam expansion is stateless across candidates."""
+
+    def step(
+        self,
+        proposed_log_prob: float,
+        alpha: float = 1.0, #noqa:ARG002
+        forward_log_q: float = 0.0, #noqa:ARG002
+        reverse_log_q: float = 0.0, #noqa:ARG002
+    ) -> float:
+        """Compatibility no-op; token-beam mode does not use MH transitions."""
+        return proposed_log_prob
+
+    def should_continue(self, branch_log_probs: npt.NDArray[np.float64]) -> bool:
+        """Compatibility no-op; token-beam mode controls depth directly."""
+        return False
+
+    def future_logprob(self, alpha: float, branch_log_probs: npt.NDArray[np.float64]) -> np.float64:
+        """Return log-mean-exp over supplied branch scores.
+
+        This method is retained for compatibility, but token-beam mode
+        normally uses :meth:`future_logprob_from_context`.
+        """
+        if len(branch_log_probs) == 0:
+            msg = 'branch_log_probs cannot be empty'
+            raise ValueError(msg)
+
+        scaled = alpha * branch_log_probs
+        max_lp = np.float64(scaled.max())
+        return np.log(np.mean(np.exp(scaled - max_lp))) + max_lp
+
+    def future_logprob_from_context(
+        self,
+        alpha: float,
+        branch_ctx: list[int],
+        lookahead_depth: int,
+        query_next: Callable[[list[int]], dict[str, float]],
+        tokenize_token: Callable[[str], list[int]],
+    ) -> np.float64:
+        """Run token-level beam expansion and return the future log-weight."""
+        beams: list[tuple[list[int], float]] = [(list(branch_ctx), 0.0)]
+
+        for _ in range(lookahead_depth):
+            expanded: list[tuple[list[int], float]] = []
+
+            for beam_ctx, cum_lp in beams:
+                next_token_lps = query_next(beam_ctx)
+                top_items = sorted(
+                    next_token_lps.items(),
+                    key=lambda kv: kv[1],
+                    reverse=True,
+                )[: self.branch_top_k]
+
+                for token_str, token_lp in top_items:
+                    token_ids = tokenize_token(token_str)
+                    if not token_ids:
+                        continue
+                    expanded.append((beam_ctx + token_ids, cum_lp + float(token_lp)))
+
+            if not expanded:
+                break
+
+            expanded.sort(key=lambda item: item[1], reverse=True)
+            beams = expanded[: self.beam_width]
+
+        if not beams:
+            return np.float64(-np.inf)
+
+        beam_log_probs = np.array([lp for _, lp in beams], dtype=np.float64)
+        scaled = alpha * beam_log_probs
+        max_lp = np.float64(scaled.max())
+        return np.log(np.mean(np.exp(scaled - max_lp))) + max_lp
+
+
 class SamplePowerDist:
     """Adjust token log-probabilities using future-branch power-distribution sampling.
 
@@ -318,6 +416,39 @@ class SamplePowerDist:
         """
         result: dict[str, float] = {}
 
+        if self.branch_sampler.supports_token_beam:
+            def score_future(branch_ctx: list[int]) -> np.float64:
+                return self.branch_sampler.future_logprob_from_context(
+                    alpha=self.alpha,
+                    branch_ctx=branch_ctx,
+                    lookahead_depth=self.lookahead_depth,
+                    query_next=context.query_next,
+                    tokenize_token=context.tokenize_token,
+                )
+        else:
+            def score_future(branch_ctx: list[int]) -> np.float64:
+                branch_log_probs_list: list[float] = []
+                self.branch_sampler.reset()
+
+                while True:
+                    proposed_branch_log_prob = context.query_branch(
+                        branch_ctx, self.lookahead_depth
+                    )
+
+                    accepted_log_prob = self.branch_sampler.step(
+                        proposed_log_prob=proposed_branch_log_prob,
+                        alpha=self.alpha,
+                    )
+                    branch_log_probs_list.append(accepted_log_prob)
+
+                    if not self.branch_sampler.should_continue(
+                        np.array(branch_log_probs_list, dtype=np.float64)
+                    ):
+                        break
+
+                branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
+                return self.branch_sampler.future_logprob(self.alpha, branch_log_probs)
+
         candidate_bar = tqdm(
             context.token_probs.items(),
             desc='candidates',
@@ -328,28 +459,7 @@ class SamplePowerDist:
         for token, log_prob in candidate_bar:
             token_ids = context.tokenize_token(token)
             branch_ctx = list(context.context_tokens) + token_ids
-            branch_log_probs_list: list[float] = []
-            self.branch_sampler.reset()
-
-            while True:
-                proposed_branch_log_prob = context.query_branch(
-                    branch_ctx, self.lookahead_depth
-                )
-
-                accepted_log_prob = self.branch_sampler.step(
-                    proposed_log_prob=proposed_branch_log_prob,
-                    alpha=self.alpha,
-                )
-                branch_log_probs_list.append(accepted_log_prob)
-
-                if not self.branch_sampler.should_continue(
-                    np.array(branch_log_probs_list, dtype=np.float64)
-                ):
-                    break
-
-            branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
-
-            future_lp = self.branch_sampler.future_logprob(self.alpha, branch_log_probs)
+            future_lp = score_future(branch_ctx)
             result[token] = self.alpha * log_prob + future_lp
 
         return result

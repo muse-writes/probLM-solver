@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from problm_solver.adjust_probs import (
+    BeamSampler,
     MetropolisSampler,
     SampleLowTemp,
     SamplePowerDist,
@@ -249,11 +250,27 @@ def ui_math500(model: ModelInstance, model_path: Path) -> None:
     math500_problems = get_problems_math500()
 
     print('For MATH500 runs, temporarily using hard-coded parameters.')
+    print('Select branch sampler runtype for power-distribution sampling:')
+    print('  [1] Metropolis sampler')
+    print('  [2] Beam sampler (single-pass)')
+
+    while True:
+        runtype = input('Choose sampler (1-2): ').strip()
+        if runtype in {'1', '2'}:
+            break
+        print('Invalid choice, try again.')
+
+    if runtype == '1':
+        branch_sampler = MetropolisSampler(max_branches=10)
+        sampler_label = 'metropolis'
+    else:
+        branch_sampler = BeamSampler(beam_width=10, branch_top_k=5)
+        sampler_label = 'beam'
 
     sampling_fn = SamplePowerDist(
         alpha=2.0,
         lookahead_depth=20,
-        branch_sampler=MetropolisSampler(max_branches=10)
+        branch_sampler=branch_sampler,
     )
 
     results = model.test_dataset_adjusted(
@@ -261,7 +278,7 @@ def ui_math500(model: ModelInstance, model_path: Path) -> None:
         top_k=30,
         top_p=0.9,
         adjust_fn=sampling_fn,
-        max_tokens=512
+        max_tokens=512,
     )
 
     control = model.test_dataset_adjusted(
@@ -269,12 +286,12 @@ def ui_math500(model: ModelInstance, model_path: Path) -> None:
         top_k=30,
         top_p=0.9,
         adjust_fn=adjust_identity,
-        max_tokens=512
+        max_tokens=512,
     )
 
 # Combine into a DataFrame alongside the original dataset columns.
     df = math500_data.copy()
-    df['power_dist_answer'] = results
+    df[f'power_dist_{sampler_label}_answer'] = results
     df['control_answer'] = control
 
 # Prompt and save.

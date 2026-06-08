@@ -7,6 +7,7 @@ import pytest
 
 from problm_solver.adjust_probs import (
     AdjustFn,
+    BeamSampler,
     BranchSampler,
     GenerationContext,
     MetropolisSampler,
@@ -385,6 +386,70 @@ class TestMetropolisSampler:
 
 
 # ---------------------------------------------------------------------------
+# TestBeamSampler
+# ---------------------------------------------------------------------------
+
+class TestBeamSampler:
+    """Tests for token-by-token BeamSampler."""
+
+    def test_step_returns_proposed_log_prob_unchanged(self) -> None:
+        """BeamSampler accepts each proposal as-is in compatibility mode."""
+        sampler = BeamSampler(beam_width=2, branch_top_k=3)
+        assert sampler.step(-1.25, alpha=2.0) == pytest.approx(-1.25)
+
+    def test_supports_token_beam_flag_enabled(self) -> None:
+        """Beam sampler advertises token-beam expansion support."""
+        assert BeamSampler().supports_token_beam is True
+
+    def test_future_logprob_raises_on_empty_input(self) -> None:
+        """future_logprob rejects empty branch arrays."""
+        sampler = BeamSampler(beam_width=2, branch_top_k=2)
+        with pytest.raises(ValueError, match='cannot be empty'):
+            sampler.future_logprob(alpha=1.0, branch_log_probs=np.array([], dtype=np.float64))
+
+    def test_invalid_constructor_args_raise(self) -> None:
+        """beam_width and branch_top_k must both be positive."""
+        with pytest.raises(ValueError, match='beam_width'):
+            BeamSampler(beam_width=0)
+        with pytest.raises(ValueError, match='branch_top_k'):
+            BeamSampler(beam_width=1, branch_top_k=0)
+
+    def test_future_logprob_from_context_expands_depth_and_prunes_to_beam(self) -> None:
+        """Token-by-token beam expansion keeps best cumulative log-probability beams."""
+        sampler = BeamSampler(beam_width=2, branch_top_k=2)
+
+        def query_next(ctx_ids: list[int]) -> dict[str, float]:
+            # Depth 0 from root context
+            if ctx_ids == [10]:
+                return {' A': -0.1, ' B': -0.5, ' C': -10.0}
+            # Depth 1 from best beams [10,1] and [10,2]
+            if ctx_ids == [10, 1]:
+                return {' A': -0.2, ' B': -1.0}
+            if ctx_ids == [10, 2]:
+                return {' A': -0.3, ' B': -0.4}
+            return {}
+
+        token_map = {' A': [1], ' B': [2], ' C': [3]}
+        tokenize = lambda s: token_map[s]
+
+        result = sampler.future_logprob_from_context(
+            alpha=1.0,
+            branch_ctx=[10],
+            lookahead_depth=2,
+            query_next=query_next,
+            tokenize_token=tokenize,
+        )
+
+        # Kept beams after depth=2:
+        # [10,1,1] => -0.1 + -0.2 = -0.3
+        # [10,2,1] => -0.5 + -0.3 = -0.8
+        vals = np.array([-0.3, -0.8], dtype=np.float64)
+        max_lp = vals.max()
+        expected = np.log(np.mean(np.exp(vals - max_lp))) + max_lp
+        assert result == pytest.approx(expected)
+
+
+# ---------------------------------------------------------------------------
 # TestSamplePowerDistInit
 # ---------------------------------------------------------------------------
 
@@ -432,6 +497,7 @@ class TestSamplePowerDistCall:
     def mock_sampler(self) -> MagicMock:
         """Return a mock BranchSampler that accepts proposals and stops after one branch."""
         s = MagicMock(spec=BranchSampler)
+        s.supports_token_beam = False
         s.step.side_effect = lambda proposed_log_prob, **_: proposed_log_prob
         s.should_continue.return_value = False  # stop after the first branch
         s.future_logprob.return_value = 0.0
@@ -549,6 +615,7 @@ class TestSamplePowerDistCall:
     def test_branch_loop_has_runaway_guard(self) -> None:
         """Guard fails fast if branch sampling runs beyond expected iterations."""
         mock_sampler = MagicMock(spec=BranchSampler)
+        mock_sampler.supports_token_beam = False
         mock_sampler.step.side_effect = lambda proposed_log_prob, **_: proposed_log_prob
         # For each candidate token: run exactly 2 branches, then stop.
         mock_sampler.should_continue.side_effect = [True, False, True, False]
@@ -577,6 +644,32 @@ class TestSamplePowerDistCall:
         spd(ctx)
 
         assert query_calls == 4
+
+    def test_works_with_beam_sampler_single_pass(self) -> None:
+        """SamplePowerDist with BeamSampler uses query_next expansion, not query_branch."""
+        beam = BeamSampler(beam_width=2, branch_top_k=2)
+
+        def query_next(_: list[int]) -> dict[str, float]:
+            return {' a': -0.1, ' b': -0.3, ' c': -2.0}
+
+        query_next_mock = MagicMock(side_effect=query_next)
+        query_branch = MagicMock(return_value=-10.0)
+        ctx = GenerationContext(
+            token_probs={' hello': -0.5, ' world': -1.2},
+            prev_probs=[],
+            context_tokens=[1, 2],
+            query_next=query_next_mock,
+            query_branch=query_branch,
+            tokenize_token=MagicMock(return_value=[99]),
+        )
+
+        result = SamplePowerDist(alpha=1.0, lookahead_depth=2, branch_sampler=beam)(ctx)
+
+        # Beam mode expands through query_next only.
+        assert query_next_mock.call_count > 0
+        assert query_branch.call_count == 0
+        assert set(result.keys()) == {' hello', ' world'}
+        assert all(isinstance(v, float) for v in result.values())
 
 
 # ---------------------------------------------------------------------------
