@@ -10,11 +10,8 @@ from problm_solver.data import LLMNextTokenData, LLMOutputData, LLMOutputDataFul
 
 
 def _make_llama_mock(response_text: str = 'Mock response.') -> MagicMock:
-    """Return a MagicMock that mimics the Llama chat completion API."""
+    """Return a MagicMock that mimics the low-level llama.cpp API used by ModelInstance."""
     mock_llm = MagicMock()
-    mock_llm.create_chat_completion.return_value = {
-        'choices': [{'message': {'content': response_text}}]
-    }
     mock_llm.metadata = {
         'general.architecture': 'llama',
         'llama.block_count': '32',
@@ -254,16 +251,6 @@ class TestModelInstanceGenerateData:
         with patch.object(model_instance, 'query', return_value='answer'):
             result = model_instance.generate_data(2)
         assert result.written is False
-
-
-def _make_next_token_completion(top_logprobs: dict) -> dict:
-    """Build a create_completion return value with the given top_logprobs dict."""
-    return {
-        'choices': [{
-            'logprobs': {'top_logprobs': [top_logprobs]},
-            'finish_reason': 'length',
-        }]
-    }
 
 
 class TestModelInstanceQueryBranch:
