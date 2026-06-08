@@ -320,6 +320,17 @@ class ModelInstance:
         return shifted - np.log(np.exp(shifted).sum())
 
 
+    @staticmethod
+    def _top_k_ids_from_logprobs(
+        logprobs: npt.NDArray[np.float64],
+        n: int,
+    ) -> list[tuple[int, float]]:
+        """Return top-n ``(token_id, logprob)`` pairs ordered descending by logprob."""
+        n = min(n, len(logprobs))
+        top_indices = np.argpartition(logprobs, -n)[-n:]
+        top_indices = top_indices[np.argsort(logprobs[top_indices])[::-1]]
+        return [(int(idx), float(logprobs[idx])) for idx in top_indices]
+
     def _top_k_from_logprobs(
         self,
         logprobs: npt.NDArray[np.float64],
@@ -455,6 +466,7 @@ class ModelInstance:
         for step in tqdm(range(max_tokens), desc='generate_adjusted', unit='tok'):
             logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
             top_k_lp = candidate_generator(logprobs, top_k)
+            pre_adjust_state = self.save_live_state()
             ctx = GenerationContext(
                 token_probs=top_k_lp,
                 prev_probs=list(prev_probs),
@@ -466,8 +478,15 @@ class ModelInstance:
                 tokenize_token=lambda s: self._llm.tokenize(
                     s.encode('utf-8'), add_bos=False, special=False,
                 ),
+                base_live_state=pre_adjust_state,
+                query_next_ids_from_live=lambda n: self._top_k_ids_from_logprobs(
+                    self._log_softmax(self._llm.scores[self._llm.n_tokens - 1]),
+                    n,
+                ),
+                save_live_state=self.save_live_state,
+                load_live_state=self.load_live_state,
+                eval_tokens=self._llm.eval,
             )
-            pre_adjust_state = self.save_live_state()
             adjusted = adjust_fn(ctx)
             self.load_live_state(pre_adjust_state)
             token_str = sample_from_logprobs(adjusted)

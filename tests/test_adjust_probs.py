@@ -418,26 +418,39 @@ class TestBeamSampler:
         """Token-by-token beam expansion keeps best cumulative log-probability beams."""
         sampler = BeamSampler(beam_width=2, branch_top_k=2)
 
-        def query_next(ctx_ids: list[int]) -> dict[str, float]:
+        # Fake KV-state machine: state is just tuple(context_token_ids)
+        live_ctx = {'tokens': [10]}
+
+        def load_state(state):
+            live_ctx['tokens'] = list(state)
+
+        def save_state():
+            return tuple(live_ctx['tokens'])
+
+        def eval_tokens(ids: list[int]):
+            live_ctx['tokens'].extend(ids)
+
+        def query_next_ids_from_live(_: int) -> list[tuple[int, float]]:
+            ctx_ids = live_ctx['tokens']
             # Depth 0 from root context
             if ctx_ids == [10]:
-                return {' A': -0.1, ' B': -0.5, ' C': -10.0}
+                return [(1, -0.1), (2, -0.5), (3, -10.0)]
             # Depth 1 from best beams [10,1] and [10,2]
             if ctx_ids == [10, 1]:
-                return {' A': -0.2, ' B': -1.0}
+                return [(1, -0.2), (2, -1.0)]
             if ctx_ids == [10, 2]:
-                return {' A': -0.3, ' B': -0.4}
-            return {}
-
-        token_map = {' A': [1], ' B': [2], ' C': [3]}
-        tokenize = lambda s: token_map[s]
+                return [(1, -0.3), (2, -0.4)]
+            return []
 
         result = sampler.future_logprob_from_context(
             alpha=1.0,
-            branch_ctx=[10],
+            base_live_state=(10,),
+            branch_token_ids=[],
             lookahead_depth=2,
-            query_next=query_next,
-            tokenize_token=tokenize,
+            query_next_ids_from_live=query_next_ids_from_live,
+            save_live_state=save_state,
+            load_live_state=load_state,
+            eval_tokens=eval_tokens,
         )
 
         # Kept beams after depth=2:
@@ -646,27 +659,39 @@ class TestSamplePowerDistCall:
         assert query_calls == 4
 
     def test_works_with_beam_sampler_single_pass(self) -> None:
-        """SamplePowerDist with BeamSampler uses query_next expansion, not query_branch."""
+        """SamplePowerDist with BeamSampler uses stateful next-token expansion, not query_branch."""
         beam = BeamSampler(beam_width=2, branch_top_k=2)
 
-        def query_next(_: list[int]) -> dict[str, float]:
-            return {' a': -0.1, ' b': -0.3, ' c': -2.0}
+        live_ctx = {'tokens': [1, 2]}
 
-        query_next_mock = MagicMock(side_effect=query_next)
+        def load_state(state):
+            live_ctx['tokens'] = list(state)
+
+        def save_state():
+            return tuple(live_ctx['tokens'])
+
+        def eval_tokens(ids: list[int]):
+            live_ctx['tokens'].extend(ids)
+
+        query_next_ids_mock = MagicMock(return_value=[(3, -0.1), (4, -0.3)])
         query_branch = MagicMock(return_value=-10.0)
         ctx = GenerationContext(
             token_probs={' hello': -0.5, ' world': -1.2},
             prev_probs=[],
             context_tokens=[1, 2],
-            query_next=query_next_mock,
+            query_next=MagicMock(),
             query_branch=query_branch,
             tokenize_token=MagicMock(return_value=[99]),
+            base_live_state=(1, 2),
+            query_next_ids_from_live=query_next_ids_mock,
+            save_live_state=save_state,
+            load_live_state=load_state,
+            eval_tokens=eval_tokens,
         )
 
         result = SamplePowerDist(alpha=1.0, lookahead_depth=2, branch_sampler=beam)(ctx)
 
-        # Beam mode expands through query_next only.
-        assert query_next_mock.call_count > 0
+        assert query_next_ids_mock.call_count > 0
         assert query_branch.call_count == 0
         assert set(result.keys()) == {' hello', ' world'}
         assert all(isinstance(v, float) for v in result.values())

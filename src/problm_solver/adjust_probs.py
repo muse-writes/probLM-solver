@@ -4,6 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -44,6 +45,11 @@ class GenerationContext:
     query_next: Callable[[list[int]], dict[str, float]]
     query_branch: Callable[[list[int], int], float]
     tokenize_token: Callable[[str], list[int]]
+    base_live_state: Any | None = None
+    query_next_ids_from_live: Callable[[int], list[tuple[int, float]]] | None = None
+    save_live_state: Callable[[], Any] | None = None
+    load_live_state: Callable[[Any], None] | None = None
+    eval_tokens: Callable[[list[int]], None] | None = None
 
 
 # Callable that receives a GenerationContext and returns a modified log-prob
@@ -148,10 +154,13 @@ class BranchSampler(ABC):
     def future_logprob_from_context(
         self,
         alpha: float,
-        branch_ctx: list[int],
+        base_live_state: Any,
+        branch_token_ids: list[int],
         lookahead_depth: int,
-        query_next: Callable[[list[int]], dict[str, float]],
-        tokenize_token: Callable[[str], list[int]],
+        query_next_ids_from_live: Callable[[int], list[tuple[int, float]]],
+        save_live_state: Callable[[], Any],
+        load_live_state: Callable[[Any], None],
+        eval_tokens: Callable[[list[int]], None],
     ) -> np.float64:
         """Optional token-by-token beam expansion hook.
 
@@ -314,30 +323,34 @@ class BeamSampler(BranchSampler):
     def future_logprob_from_context(
         self,
         alpha: float,
-        branch_ctx: list[int],
+        base_live_state: Any,
+        branch_token_ids: list[int],
         lookahead_depth: int,
-        query_next: Callable[[list[int]], dict[str, float]],
-        tokenize_token: Callable[[str], list[int]],
+        query_next_ids_from_live: Callable[[int], list[tuple[int, float]]],
+        save_live_state: Callable[[], Any],
+        load_live_state: Callable[[Any], None],
+        eval_tokens: Callable[[list[int]], None],
     ) -> np.float64:
-        """Run token-level beam expansion and return the future log-weight."""
-        beams: list[tuple[list[int], float]] = [(list(branch_ctx), 0.0)]
+        """Run token-level beam expansion with KV-cache state reuse."""
+        load_live_state(base_live_state)
+        if branch_token_ids:
+            eval_tokens(branch_token_ids)
+        root_state = save_live_state()
+
+        beams: list[tuple[Any, float]] = [(root_state, 0.0)]
 
         for _ in range(lookahead_depth):
-            expanded: list[tuple[list[int], float]] = []
+            expanded: list[tuple[Any, float]] = []
 
-            for beam_ctx, cum_lp in beams:
-                next_token_lps = query_next(beam_ctx)
-                top_items = sorted(
-                    next_token_lps.items(),
-                    key=lambda kv: kv[1],
-                    reverse=True,
-                )[: self.branch_top_k]
+            for beam_state, cum_lp in beams:
+                load_live_state(beam_state)
+                top_next = query_next_ids_from_live(self.branch_top_k)
 
-                for token_str, token_lp in top_items:
-                    token_ids = tokenize_token(token_str)
-                    if not token_ids:
-                        continue
-                    expanded.append((beam_ctx + token_ids, cum_lp + float(token_lp)))
+                for token_id, token_lp in top_next:
+                    load_live_state(beam_state)
+                    eval_tokens([token_id])
+                    child_state = save_live_state()
+                    expanded.append((child_state, cum_lp + float(token_lp)))
 
             if not expanded:
                 break
@@ -417,13 +430,26 @@ class SamplePowerDist:
         result: dict[str, float] = {}
 
         if self.branch_sampler.supports_token_beam:
-            def score_future(branch_ctx: list[int]) -> np.float64:
+            if (
+                context.base_live_state is None
+                or context.query_next_ids_from_live is None
+                or context.save_live_state is None
+                or context.load_live_state is None
+                or context.eval_tokens is None
+            ):
+                msg = 'Token-beam sampler requires live-state callables in GenerationContext'
+                raise ValueError(msg)
+
+            def score_future(branch_token_ids: list[int]) -> np.float64:
                 return self.branch_sampler.future_logprob_from_context(
                     alpha=self.alpha,
-                    branch_ctx=branch_ctx,
+                    base_live_state=context.base_live_state,
+                    branch_token_ids=branch_token_ids,
                     lookahead_depth=self.lookahead_depth,
-                    query_next=context.query_next,
-                    tokenize_token=context.tokenize_token,
+                    query_next_ids_from_live=context.query_next_ids_from_live,
+                    save_live_state=context.save_live_state,
+                    load_live_state=context.load_live_state,
+                    eval_tokens=context.eval_tokens,
                 )
         else:
             def score_future(branch_ctx: list[int]) -> np.float64:
@@ -458,8 +484,11 @@ class SamplePowerDist:
         )
         for token, log_prob in candidate_bar:
             token_ids = context.tokenize_token(token)
-            branch_ctx = list(context.context_tokens) + token_ids
-            future_lp = score_future(branch_ctx)
+            if self.branch_sampler.supports_token_beam:
+                future_lp = score_future(token_ids)
+            else:
+                branch_ctx = list(context.context_tokens) + token_ids
+                future_lp = score_future(branch_ctx)
             result[token] = self.alpha * log_prob + future_lp
 
         return result
