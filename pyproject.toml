@@ -167,6 +167,7 @@ type = "virtualenv"
 
   [tool.poe.tasks.mutmut]
   help = "Run mutation tests"
+  env = { PYTEST_ADDOPTS = "--color=yes --strict-config --strict-markers -q" }
   cmd = "mutmut run"
 
   [tool.poe.tasks.conda]
