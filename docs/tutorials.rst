@@ -79,7 +79,7 @@ Whilst low-temperature sampling goes a way towards solving this issue, it only c
 At considerable computational expense, sampling from the power distribution can be performed by performing look-ahead runs, and utilising their probabilities before sampling.
 
 This code implements a general framework for sampling from the power distribution.
-Let's start with the code snippet below. In this example we will be using the in-built Metropolis method to sample potential future branches, inspired by the implementation from `Karan and Du`_.
+Let's start with the code snippet below. In this example we use the built-in Metropolis method to sample potential future branches, inspired by the implementation from `Karan and Du`_.
 
 .. sourcecode:: python
    :linenos:
@@ -116,6 +116,18 @@ We can see that ``MetropolisSampler`` is instanced with two variables.
 ``equil_branches`` is the number of branches to generate and then discard from probability and convergence calculations, as the method is still locating a minimum. 
 ``max_branches`` is the maximum number of branches to sample for each of the top-k most probable tokens.
 
+A second built-in option is token-level beam expansion:
+
+.. sourcecode:: python
+
+   from problm_solver.adjust_probs import BeamSampler, SamplePowerDist
+
+   sampling_func = SamplePowerDist(
+       alpha=2.0,
+       lookahead_depth=10,
+       branch_sampler=BeamSampler(beam_width=10, branch_top_k=5),
+   )
+
 
 Creating a Branch Sampler
 -------------------------
@@ -131,7 +143,7 @@ If we take a look at the header for ``MetropolisSampler``:
 we can see that it inherits from an abstract base class called ``BranchSampler``.
 
 New branch sampling algorithms for generating tokens can be defined by the user based on ``BranchSampler``.
-It implements three template functions:
+It implements four required methods (plus an optional beam hook):
 
 .. sourcecode:: python
    :linenos:
@@ -139,7 +151,7 @@ It implements three template functions:
 
    class BranchSampler(ABC):
 
-       def reset():
+       def reset(self) -> None:
            """Resets stateful samplers."""
 
        @abstractmethod
@@ -150,18 +162,24 @@ It implements three template functions:
            forward_log_q: float = 0.0,
            reverse_log_q: float = 0.0,
        ) -> float:
-           """Processes the sampler's state and returns the accepted branch."""
+           """Processes sampler state and returns accepted branch log-probability."""
            ...
 
        @abstractmethod
        def should_continue(self, branch_log_probs: npt.NDArray[np.float64]) -> bool:
-           """Control flow logic for deciding when the algorithm is finished."""
+           """Control-flow logic for deciding when proposal sampling is finished."""
+           ...
+
+       @abstractmethod
+       def future_logprob(self, alpha: float, branch_log_probs: npt.NDArray[np.float64]) -> np.float64:
+           """Aggregates sampled branch log-probabilities into one future score."""
            ...
 
 
-- ``BranchSampler.reset()`` ought to reset any state variables (the Metropolis method tracks the current most-favourible logarithmic probability, for instance).
-- ``BranchSampler.step()`` controls the criteria for accepting or rejecting a new logarithmic probability and returns the chosen probability.
-- ``BranchSampler.should_continue()`` handles logic for terminating a branch sampling algorithm.
+- ``BranchSampler.reset()`` ought to reset any state variables (the Metropolis method tracks the current most-favourable logarithmic probability, for instance).
+- ``BranchSampler.step()`` controls criteria for accepting/rejecting a new branch log-probability and returns the chosen probability.
+- ``BranchSampler.should_continue()`` handles logic for terminating proposal sampling.
+- ``BranchSampler.future_logprob()`` combines collected branch log-probabilities into one future score used by ``SamplePowerDist``.
 
 All of these methods are called at some point by ``ModelInstance.generate_adjusted()``.
 
@@ -192,28 +210,29 @@ Let's explore a hypothetical greedy branch sampler. It might be defined in the f
        """My greedy sampler, always picks the most probable branch."""
 
        def __init__(self, max_branches: int = 50):
-           """Initialisation method."""
            self._max_branches = max_branches
-
-   # Stateful parameters.
            self._current_log_prob: float | None = None
 
        def reset(self) -> None:
-           """Reset state."""
            self._current_log_prob = None
 
-       def step(self, proposed_log_prob: float) -> float:
-           """Calculate and return new best log-prob."""
-           if (self._current_log_prob = None
-               or proposed_log_prob > self._current_log_prob):
+       def step(
+           self,
+           proposed_log_prob: float,
+           alpha: float = 1.0,
+           forward_log_q: float = 0.0,
+           reverse_log_q: float = 0.0,
+       ) -> float:
+           if self._current_log_prob is None or proposed_log_prob > self._current_log_prob:
                self._current_log_prob = proposed_log_prob
            return self._current_log_prob
 
        def should_continue(self, branch_log_probs) -> bool:
-           """Control flow for halting algorithm."""
-            n = len(branch_log_probs)
-            if n >= self._max_branches:
-                return False
+           return len(branch_log_probs) < self._max_branches
+
+       def future_logprob(self, alpha, branch_log_probs):
+           # Greedy: use best branch only.
+           return alpha * max(branch_log_probs)
 
 
 You can then use this sampler in place of any other.
