@@ -43,7 +43,11 @@ conda activate problm-solver
 If you have an NVIDIA GPU and want hardware-accelerated inference, reinstall `llama-cpp-python` with CUDA support after activating the environment:
 
 ```sh
-CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --force-reinstall
+CMAKE_ARGS="-DGGML_CUDA=on" pip install "llama-cpp-python>=0.3.23" --force-reinstall
+```
+or
+```sh
+CMAKE_ARGS="-DGGML_CUDA=on" conda install "llama-cpp-python>=0.3.23" --force-reinstall
 ```
 
 ### Docker
