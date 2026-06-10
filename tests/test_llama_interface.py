@@ -117,26 +117,34 @@ class TestModelInstanceQuery:
 
     def test_returns_string(self, low_level_model) -> None:
         """query() returns a plain string."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(4)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             result = low_level_model.query()
         assert isinstance(result, str)
 
     def test_returns_detokenized_output(self, low_level_model) -> None:
         """query() returns the detokenized form of the generated token IDs."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(4)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             result = low_level_model.query()
         assert result == 'decoded output'
 
     def test_calls_reset_then_eval_with_prompt(self, low_level_model) -> None:
         """query() calls reset() then eval() with the formatted prompt tokens."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(4)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             low_level_model.query()
         low_level_model._llm.reset.assert_called_once()
         assert low_level_model._llm.eval.call_args_list[0] == call([1, 2, 3])
 
     def test_stops_at_eos(self, low_level_model) -> None:
         """query() stops and excludes EOS; only the token before EOS is in the output."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(4)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             low_level_model.query()
         # eval: once for prompt, once for the non-EOS token; EOS is not eval'd
         assert low_level_model._llm.eval.call_count == 2
@@ -178,13 +186,17 @@ class TestModelInstanceQueryLogProbs:
         """query_log_probs() returns an LLMTokenData instance."""
         from problm_solver.data import LLMTokenData
 
-        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(4)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             result = low_level_model.query_log_probs()
         assert isinstance(result, LLMTokenData)
 
     def test_tokens_are_strings(self, low_level_model) -> None:
         """tokens in the returned LLMTokenData are decoded strings."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(4)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             result = low_level_model.query_log_probs()
         assert all(isinstance(t, str) for t in result.tokens)
 
@@ -201,25 +213,33 @@ class TestModelInstanceQueryLogProbs:
 
     def test_probs_are_between_zero_and_one(self, low_level_model) -> None:
         """All probabilities are valid (in the range (0, 1])."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(4)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             result = low_level_model.query_log_probs()
         assert all(0.0 < p <= 1.0 for p in result.probs)
 
     def test_tokens_and_probs_same_length(self, low_level_model) -> None:
         """tokens and probs are positionally aligned and have equal length."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(4)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             result = low_level_model.query_log_probs()
         assert len(result.tokens) == len(result.probs)
 
     def test_prompt_is_stored(self, low_level_model) -> None:
         """The prompt is stored on the returned LLMTokenData."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(4)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             result = low_level_model.query_log_probs()
         assert result.prompt == 'What is the answer?'
 
     def test_stops_at_eos(self, low_level_model) -> None:
         """query_log_probs() accumulates only the tokens generated before EOS."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(4)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(4)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             result = low_level_model.query_log_probs()
         # scores[2]=token1 (non-EOS), scores[3]=token3=EOS: exactly 1 token
         assert len(result.tokens) == 1
@@ -310,7 +330,9 @@ class TestModelInstanceQueryBranch:
 
     def test_returns_float(self, branch_model) -> None:
         """query_branch() returns a Python float."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(self._VOCAB)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             result = branch_model.query_branch([10, 20, 30], max_tokens=1)
         assert isinstance(result, float)
 
@@ -318,7 +340,9 @@ class TestModelInstanceQueryBranch:
         """Returns 0.0 when the first sampled token is EOS."""
         # Make EOS the argmax by giving it an overwhelming logit.
         branch_model._llm.scores[2] = [-10.0, -10.0, -10.0, -10.0, 10.0]
-        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(self._VOCAB)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             result = branch_model.query_branch([10, 20, 30], max_tokens=5)
         assert result == 0.0
 
@@ -343,7 +367,9 @@ class TestModelInstanceQueryBranch:
 
     def test_stops_at_max_tokens(self, branch_model) -> None:
         """Generation stops after exactly max_tokens tokens when EOS never appears."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(self._VOCAB)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             branch_model.query_branch([10, 20, 30], max_tokens=2)
         # eval: once for context, once per generated token (2 tokens)
         assert branch_model._llm.eval.call_count == 3
@@ -365,20 +391,26 @@ class TestModelInstanceQueryBranch:
 
     def test_calls_reset(self, branch_model) -> None:
         """reset() is called once to clear stale KV-cache state."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(self._VOCAB)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             branch_model.query_branch([10, 20, 30], max_tokens=1)
         branch_model._llm.reset.assert_called_once()
 
     def test_calls_eval_with_context_tokens(self, branch_model) -> None:
         """eval() is first called with the full context token list."""
         context = [10, 20, 30]
-        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(self._VOCAB)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             branch_model.query_branch(context, max_tokens=1)
         assert branch_model._llm.eval.call_args_list[0] == call(context)
 
     def test_saves_state_after_context_eval(self, branch_model) -> None:
         """save_state() is called exactly once, after evaluating the context."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(self._VOCAB)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             branch_model.query_branch([10, 20, 30], max_tokens=1)
         branch_model._llm.save_state.assert_called_once()
         # The n_tokens captured at save time equals len(context_tokens).
@@ -386,7 +418,9 @@ class TestModelInstanceQueryBranch:
 
     def test_loads_saved_state(self, branch_model) -> None:
         """load_state() is called with exactly the object returned by save_state()."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(self._VOCAB)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             branch_model.query_branch([10, 20, 30], max_tokens=1)
         branch_model._llm.load_state.assert_called_once_with(
             branch_model._test_saved_state
@@ -394,7 +428,9 @@ class TestModelInstanceQueryBranch:
 
     def test_eval_called_once_per_generated_token(self, branch_model) -> None:
         """eval() is called once for the context and once for each generated token."""
-        with patch('numpy.random.gumbel', return_value=np.zeros(self._VOCAB)):
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(self._VOCAB)
+        with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
             branch_model.query_branch([10, 20, 30], max_tokens=3)
         # 1 context eval + 3 single-token evals
         assert branch_model._llm.eval.call_count == 4
