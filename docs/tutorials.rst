@@ -4,6 +4,19 @@ Tutorials
 .. highlight:: python
    :linenothreshold: 10
 
+Overview
+--------
+
+This page provides a quick-start guide to scripting with probLM-solver. Please see the other tutorial pages listed below if they are relevant to you.
+
+Tutorial Pages
+--------------
+
+.. toctree::
+   :maxdepth: 1
+
+   r_tutorial
+
 CLI
 ---
 
