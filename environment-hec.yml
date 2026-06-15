@@ -1,4 +1,4 @@
-name: problm-solver
+name: problm-solver-hec
 channels:
   - conda-forge
 dependencies:
@@ -10,7 +10,7 @@ dependencies:
   - fsspec
   - huggingface_hub
   - uv
+  - llama-cpp-python>=0.3.23
   - pip
   - pip:
-    - llama-cpp-python>=0.3.23
-    - .
+      - .
