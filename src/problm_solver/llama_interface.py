@@ -35,7 +35,14 @@ ADEQUATE_TOPP = 0.8
 class ModelInstance:
     """Keeps a model instance and its context, with methods for querying the Llama instance."""
 
-    def __init__(self, fname: str, context: str, n_ctx: int = 4096, logits_all: bool = False) -> None:
+    def __init__(
+        self,
+        fname: str,
+        context: str,
+        n_ctx: int = 4096,
+        logits_all: bool = False, # noqa: FBT001 FBT002
+        n_gpu_layers: int = 0
+    ) -> None:
         """Initialize Llama instance and store context.
 
         The RAM cache capacity is derived from the model's own metadata so
@@ -56,8 +63,16 @@ class ModelInstance:
             Defaults to 4096, which comfortably fits MATH500 problems
             (~300 prompt tokens) and up to 2048 generated tokens.
         :param logits_all: whether or not probability logging is necessary in the Llama instance.
+        :param n_gpu_layers: number of GPU layers to pass to Llama. Required for GPU accelerated
+            jobs, set to 0 otherwise.
         """
-        self._llm = Llama(model_path=fname, n_ctx=n_ctx, logits_all=logits_all, verbose=False)
+        self._llm = Llama(
+            model_path=fname,
+            n_ctx=n_ctx,
+            logits_all=logits_all,
+            verbose=False,
+            n_gpu_layers=n_gpu_layers
+        )
         _logger.info('Model %r loaded.', fname)
 
         arch = self._llm.metadata['general.architecture']
