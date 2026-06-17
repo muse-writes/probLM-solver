@@ -45,10 +45,14 @@ If you have an NVIDIA GPU and want hardware-accelerated inference, reinstall `ll
 ```sh
 CMAKE_ARGS="-DGGML_CUDA=on" pip install "llama-cpp-python>=0.3.23" --force-reinstall
 ```
-or
+
+On the HEC, and other HPC systems which use Nvidia L40(S) and H200 GPUs, oftentimes the login node won't have native GPUs, so use the command:
+
 ```sh
-CMAKE_ARGS="-DGGML_CUDA=on" conda install "llama-cpp-python>=0.3.23" --force-reinstall
+CMAKE_ARGS="-DGGML_CUDA=on -DGGML_NATIVE=off -DCMAKE_CUDA_ARCHITECTURES=89;90 pip install --force-reinstall --no-cache-dir "llama-cpp-python>=0.3.23"
 ```
+
+For complete and custom installation of `llama-cpp-python`, see [llama.cpp build docs](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md#cuda).
 
 ### Docker
 
