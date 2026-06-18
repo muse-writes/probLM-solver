@@ -715,6 +715,7 @@ def gen_adj_model(model_instance):
 
     model_instance._llm.scores = scores
     model_instance._llm.n_tokens = 0
+    model_instance._logits_all = True
     model_instance._llm.token_eos.return_value = 0
     model_instance._llm.tokenize.return_value = [42]
     model_instance._llm.detokenize.side_effect = (

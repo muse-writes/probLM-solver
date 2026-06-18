@@ -73,6 +73,7 @@ class ModelInstance:
             verbose=False,
             n_gpu_layers=n_gpu_layers
         )
+        self._logits_all = logits_all
         _logger.info('Model %r loaded.', fname)
 
         arch = self._llm.metadata['general.architecture']
@@ -443,6 +444,13 @@ class ModelInstance:
             candidate tokens at each step, and logprobs.
         """
 # Hyperparam and sampling setup.
+        if not self._logits_all:
+            msg = (
+                'generate_adjusted() requires logits_all=True when constructing ModelInstance '
+                'so per-token logits are available.'
+            )
+            raise ValueError(msg)
+
         if sampling_method is None:
             if isclass(adjust_fn):
                 sampling_method = adjust_fn.__class__.__name__
