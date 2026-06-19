@@ -440,16 +440,22 @@ class SamplePowerDist:
                 msg = 'Token-beam sampler requires live-state callables in GenerationContext'
                 raise ValueError(msg)
 
+            base_live_state = context.base_live_state
+            query_next_ids_from_live = context.query_next_ids_from_live
+            save_live_state = context.save_live_state
+            load_live_state = context.load_live_state
+            eval_tokens = context.eval_tokens
+
             def score_future(branch_token_ids: list[int]) -> np.float64:
                 return self.branch_sampler.future_logprob_from_context(
                     alpha=self.alpha,
-                    base_live_state=context.base_live_state,
+                    base_live_state=base_live_state,
                     branch_token_ids=branch_token_ids,
                     lookahead_depth=self.lookahead_depth,
-                    query_next_ids_from_live=context.query_next_ids_from_live,
-                    save_live_state=context.save_live_state,
-                    load_live_state=context.load_live_state,
-                    eval_tokens=context.eval_tokens,
+                    query_next_ids_from_live=query_next_ids_from_live,
+                    save_live_state=save_live_state,
+                    load_live_state=load_live_state,
+                    eval_tokens=eval_tokens,
                 )
         else:
             def score_future(branch_ctx: list[int]) -> np.float64:
