@@ -167,7 +167,7 @@ class ModelInstance:
         context_tokens: list[int],
         n_tokens: int,
     ) -> LLMNextTokenData:
-        """Return the top-M most likely next tokens and their log-probabilities.
+        """Return the top-k most likely next tokens and their log-probabilities.
 
         Resets the model state, evaluates ``context_tokens`` in a single
         forward pass, applies log-softmax to the last-position logits, and
@@ -491,32 +491,44 @@ class ModelInstance:
 
 # Main generation loop.
         for step in tqdm(range(max_tokens), desc='generate_adjusted', unit='tok'):
+
+# Determine logprobs and sample intersection of top-k and top-p.
             logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
             top_k_lp = candidate_generator(logprobs, top_k)
-            pre_adjust_state = self.save_live_state()
-            ctx = GenerationContext(
-                token_probs=top_k_lp,
-                prev_probs=list(prev_probs),
-                context_tokens=list(context),
-                query_next=lambda ctx_ids: (
-                    self.query_log_probs_next_token(ctx_ids, top_k).top_k_tokens
-                ),
-                query_branch=self.query_branch,
-                tokenize_token=lambda s: self._llm.tokenize(
-                    s.encode('utf-8'), add_bos=False, special=False,
-                ),
-                base_live_state=pre_adjust_state,
-                query_next_ids_from_live=lambda n: self._top_k_ids_from_logprobs(
-                    self._log_softmax(self._llm.scores[self._llm.n_tokens - 1]),
-                    n,
-                ),
-                save_live_state=self.save_live_state,
-                load_live_state=self.load_live_state,
-                eval_tokens=self._llm.eval,
-            )
-            adjusted = adjust_fn(ctx)
-            self.load_live_state(pre_adjust_state)
-            token_str = sample_from_logprobs(adjusted)
+
+# Skip adjustment and sampling if only one logprob.
+            if len(top_k_lp) == 1:
+                token_str, _ = next(iter(top_k_lp.items()))
+                token_prob = 1.
+                adjusted = { token_str: token_prob }
+            else:
+                pre_adjust_state = self.save_live_state()
+                ctx = GenerationContext(
+                    token_probs=top_k_lp,
+                    prev_probs=list(prev_probs),
+                    context_tokens=list(context),
+                    query_next=lambda ctx_ids: (
+                        self.query_log_probs_next_token(ctx_ids, top_k).top_k_tokens
+                    ),
+                    query_branch=self.query_branch,
+                    tokenize_token=lambda s: self._llm.tokenize(
+                        s.encode('utf-8'), add_bos=False, special=False,
+                    ),
+                    base_live_state=pre_adjust_state,
+                    query_next_ids_from_live=lambda n: self._top_k_ids_from_logprobs(
+                        self._log_softmax(self._llm.scores[self._llm.n_tokens - 1]),
+                        n,
+                    ),
+                    save_live_state=self.save_live_state,
+                    load_live_state=self.load_live_state,
+                    eval_tokens=self._llm.eval,
+                )
+                adjusted = adjust_fn(ctx)
+                self.load_live_state(pre_adjust_state)
+                token_str = sample_from_logprobs(adjusted)
+                token_prob = float(prob_of_token(token_str, adjusted))
+
+# Tokenize str for checks.
             token_ids = self._llm.tokenize(
                 token_str.encode('utf-8'), add_bos=False, special=True,
             )
@@ -527,7 +539,6 @@ class ModelInstance:
             self._llm.eval(token_ids)
 
 # Assign various data variables for safekeeping.
-            token_prob = float(prob_of_token(token_str, adjusted))
             _logger.debug(
                 'step %d/%d -- Sampled %r (p=%.4f)', step + 1, max_tokens, token_str, token_prob
             )
