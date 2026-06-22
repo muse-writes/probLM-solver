@@ -133,6 +133,10 @@ cli.py → TqdmHandler (utils.py)
 - **Quotes**: Single (inline and multiline)
 - **Imports**: Absolute only (`ban-relative-imports = "all"`)
 
+### Code Organisation Preference
+- Prefer helper functions to be defined at module/class scope (e.g., under the helper section at the bottom of `llama_interface.py`) rather than nested inside hot-path methods, unless closure capture is explicitly required.
+- Rationale: keeps function definitions reusable/testable and avoids per-call nested function object creation.
+
 ### Versioning
 - Conventional Commits enforced via Commitizen
 - Current version: **1.3.0**
