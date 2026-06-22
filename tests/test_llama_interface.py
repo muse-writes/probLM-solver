@@ -23,7 +23,7 @@ def _make_llama_mock(response_text: str = 'Mock response.') -> MagicMock:
     return mock_llm
 
 
-@pytest.fixture()
+@pytest.fixture
 def model_instance():
     """Return a ModelInstance with a mocked underlying Llama object."""
     from problm_solver.llama_interface import ModelInstance
@@ -73,7 +73,7 @@ class TestModelInstanceInit:
 class TestModelInstanceQuery:
     """Tests for ModelInstance.query."""
 
-@pytest.fixture()
+@pytest.fixture
 def low_level_model(model_instance):
     """Extend model_instance with low-level eval state for Phase 5 tests.
 
@@ -193,7 +193,7 @@ class TestModelInstanceQueryLogProbs:
         assert isinstance(result, LLMTokenData)
 
     def test_tokens_are_strings(self, low_level_model) -> None:
-        """tokens in the returned LLMTokenData are decoded strings."""
+        """Tokens in the returned LLMTokenData are decoded strings."""
         mock_rng = MagicMock()
         mock_rng.gumbel.return_value = np.zeros(4)
         with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
@@ -220,7 +220,7 @@ class TestModelInstanceQueryLogProbs:
         assert all(0.0 < p <= 1.0 for p in result.probs)
 
     def test_tokens_and_probs_same_length(self, low_level_model) -> None:
-        """tokens and probs are positionally aligned and have equal length."""
+        """Tokens and probs are positionally aligned and have equal length."""
         mock_rng = MagicMock()
         mock_rng.gumbel.return_value = np.zeros(4)
         with patch('problm_solver.llama_interface._as_rng', return_value=mock_rng):
@@ -280,7 +280,7 @@ class TestModelInstanceQueryBranch:
     _VOCAB = 5
     _EOS = 4
 
-    @pytest.fixture()
+    @pytest.fixture
     def branch_model(self, model_instance):
         """Configure mock LLM for query_branch with full n_tokens state tracking.
 
@@ -439,7 +439,7 @@ class TestModelInstanceQueryBranch:
 class TestQueryLogProbsNextToken:
     """Tests for ModelInstance.query_log_probs_next_token."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def next_token_model(self, model_instance):
         """Configure mock LLM for query_log_probs_next_token.
 
@@ -503,7 +503,7 @@ class TestQueryLogProbsNextToken:
 class TestFormatChatPrompt:
     """Tests for ModelInstance._format_chat_prompt."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def chat_prompt_model(self, model_instance):
         """Configure the mock LLM for _format_chat_prompt."""
         mock_result = MagicMock()
@@ -552,10 +552,10 @@ class TestFormatChatPrompt:
             ]
 
     def test_calls_tokenize_with_handler_output(self, chat_prompt_model) -> None:
-        """tokenize is called on the encoded string returned by the chat handler."""
+        """Tokenize is called on the encoded string returned by the chat handler."""
         chat_prompt_model._format_chat_prompt()
         chat_prompt_model._llm.tokenize.assert_called_once_with(
-            'formatted prompt string'.encode('utf-8'),
+            b'formatted prompt string',
             add_bos=False,
             special=True,
         )
@@ -630,7 +630,7 @@ class TestLogSoftmax:
 class TestTopKFromLogprobs:
     """Tests for ModelInstance._top_k_from_logprobs."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def logprob_model(self, model_instance):
         """Configure detokenize to return '<tokN>' for token ID N."""
         model_instance._llm.detokenize.side_effect = (
@@ -695,7 +695,7 @@ class TestTopKFromLogprobs:
         assert result['<tok1>'] == pytest.approx(-0.1)
 
 
-@pytest.fixture()
+@pytest.fixture
 def gen_adj_model(model_instance):
     """ModelInstance with all generate_adjusted() dependencies mocked.
 
@@ -752,7 +752,7 @@ class TestGenerateAdjusted:
         assert isinstance(result, LLMOutputDataFull)
 
     def test_context_is_list_of_strings(self, gen_adj_model) -> None:
-        """context on the returned LLMOutputDataFull is a list of strings."""
+        """Context on the returned LLMOutputDataFull is a list of strings."""
         result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
         assert isinstance(result.context, list)
         assert all(isinstance(s, str) for s in result.context)
@@ -884,3 +884,177 @@ class TestGenerateAdjusted:
             )
 
         assert sample_calls == max_tokens
+
+
+class TestSampleTokenAdjusted:
+    """Tests for ModelInstance.sample_token_adjusted."""
+
+    @pytest.fixture
+    def one_step_model(self, model_instance):
+        """Model configured for single-step adjusted-token sampling tests."""
+        vocab_size = 4
+        scores = np.zeros((2048, vocab_size), dtype=np.float32)
+        scores[1] = [-2.0, 3.0, 1.0, 0.0]
+        scores[2] = [-2.0, 3.0, 1.0, 0.0]
+        scores[4] = [-2.0, 3.0, 1.0, 0.0]
+        model_instance._llm.scores = scores
+        model_instance._llm.n_tokens = 0
+        model_instance._logits_all = True
+        model_instance._llm.token_eos.return_value = 0
+        model_instance._llm.detokenize.side_effect = (
+            lambda ids, special=False: f'<tok{ids[0]}>'.encode()
+        )
+        model_instance._llm.tokenize.return_value = [42]
+
+        def mock_reset():
+            model_instance._llm.n_tokens = 0
+
+        def mock_eval(tokens):
+            model_instance._llm.n_tokens += len(tokens)
+
+        model_instance._llm.reset.side_effect = mock_reset
+        model_instance._llm.eval.side_effect = mock_eval
+        return model_instance
+
+    def test_uses_live_state_without_prompt_rebuild(self, one_step_model) -> None:
+        """With live tokens present, it does not reset/eval prompt state."""
+        one_step_model._llm.n_tokens = 5
+
+        with patch.object(one_step_model, '_format_chat_prompt', side_effect=AssertionError('no prompt rebuild expected')), \
+             patch('problm_solver.llama_interface.sample_from_logprobs', return_value='<tok1>'):
+            result = one_step_model.sample_token_adjusted(
+                top_k=2,
+                top_p=1.0,
+                adjust_fn=lambda ctx: ctx.token_probs,
+                use_live_state=True,
+                commit_token=False,
+            )
+
+        one_step_model._llm.reset.assert_not_called()
+        one_step_model._llm.eval.assert_not_called()
+        assert result['state_source'] == 'live'
+        assert result['context_tokens_used_for_eval'] is None
+
+    def test_rebuilds_from_prompt_when_live_state_empty(self, one_step_model) -> None:
+        """If live state is empty, it falls back to prompt evaluation."""
+        one_step_model._llm.n_tokens = 0
+
+        with patch.object(one_step_model, '_format_chat_prompt', return_value=[1, 2]), \
+             patch('problm_solver.llama_interface.sample_from_logprobs', return_value='<tok1>'):
+            result = one_step_model.sample_token_adjusted(
+                top_k=2,
+                top_p=1.0,
+                adjust_fn=lambda ctx: ctx.token_probs,
+                use_live_state=True,
+                commit_token=False,
+            )
+
+        one_step_model._llm.reset.assert_called_once()
+        assert one_step_model._llm.eval.call_args_list[0] == call([1, 2])
+        assert result['state_source'] == 'prompt'
+        assert result['context_tokens_used_for_eval'] == [1, 2]
+
+    def test_use_live_state_false_rebuilds_even_if_live_exists(self, one_step_model) -> None:
+        """use_live_state=False forces rebuild from provided context tokens."""
+        one_step_model._llm.n_tokens = 5
+
+        with patch.object(one_step_model, '_format_chat_prompt', side_effect=AssertionError('context tokens should be used')), \
+             patch('problm_solver.llama_interface.sample_from_logprobs', return_value='<tok1>'):
+            result = one_step_model.sample_token_adjusted(
+                top_k=2,
+                top_p=1.0,
+                adjust_fn=lambda ctx: ctx.token_probs,
+                use_live_state=False,
+                context_tokens=[7, 8],
+                commit_token=False,
+            )
+
+        one_step_model._llm.reset.assert_called_once()
+        assert one_step_model._llm.eval.call_args_list[0] == call([7, 8])
+        assert result['state_source'] == 'context_tokens'
+        assert result['context_tokens_used_for_eval'] == [7, 8]
+
+    def test_returns_before_after_candidates_and_sampled_probability(self, one_step_model) -> None:
+        """Output contains before/after candidate distributions and sampled token probability."""
+
+        def adjust_fn(ctx):
+            adjusted = dict(ctx.token_probs)
+            adjusted['<tok2>'] = adjusted['<tok2>'] + 2.0
+            return adjusted
+
+        with patch.object(one_step_model, '_format_chat_prompt', return_value=[1, 2]), \
+             patch('problm_solver.llama_interface.sample_from_logprobs', return_value='<tok2>'):
+            result = one_step_model.sample_token_adjusted(
+                top_k=2,
+                top_p=1.0,
+                adjust_fn=adjust_fn,
+                use_live_state=False,
+                commit_token=False,
+            )
+
+        before_tokens = {entry['token'] for entry in result['candidates_before_adjustment']}
+        after_tokens = {entry['token'] for entry in result['candidates_after_adjustment']}
+        assert before_tokens == {'<tok1>', '<tok2>'}
+        assert after_tokens == {'<tok1>', '<tok2>'}
+
+        sampled = result['sampled_token']
+        assert sampled is not None
+        assert sampled['token'] == '<tok2>'
+        assert 0.0 < sampled['prob'] <= 1.0
+
+        sampled_after_prob = next(
+            entry['prob']
+            for entry in result['candidates_after_adjustment']
+            if entry['token'] == '<tok2>'
+        )
+        assert sampled['prob'] == pytest.approx(sampled_after_prob)
+
+    def test_default_use_live_state_true_does_not_rebuild_prompt(self, one_step_model) -> None:
+        """Default call uses live state and does not rebuild prompt when n_tokens>0."""
+        one_step_model._llm.n_tokens = 5
+
+        with patch.object(
+            one_step_model,
+            '_format_chat_prompt',
+            side_effect=AssertionError('default should not rebuild prompt'),
+        ), patch('problm_solver.llama_interface.sample_from_logprobs', return_value='<tok1>'):
+            result = one_step_model.sample_token_adjusted(
+                top_k=2,
+                top_p=1.0,
+                adjust_fn=lambda ctx: ctx.token_probs,
+                commit_token=False,
+            )
+
+        assert result['state_source'] == 'live'
+
+    def test_default_commit_token_true_commits_non_terminal_token(self, one_step_model) -> None:
+        """Default commit_token=True appends non-terminal token via eval(token_ids)."""
+        one_step_model._llm.n_tokens = 5
+        one_step_model._llm.eval.reset_mock()
+
+        with patch('problm_solver.llama_interface.sample_from_logprobs', return_value='<tok1>'):
+            result = one_step_model.sample_token_adjusted(
+                top_k=2,
+                top_p=1.0,
+                adjust_fn=lambda ctx: ctx.token_probs,
+            )
+
+        one_step_model._llm.eval.assert_called_once_with([42])
+        assert result['sampled_token_is_terminal'] is False
+
+    def test_terminal_eos_token_sets_terminal_flag_and_skips_eval(self, one_step_model) -> None:
+        """EOS token IDs are terminal, produce sampled_token=None, and are not eval-committed."""
+        one_step_model._llm.n_tokens = 5
+        one_step_model._llm.tokenize.return_value = [0]  # EOS
+        one_step_model._llm.eval.reset_mock()
+
+        with patch('problm_solver.llama_interface.sample_from_logprobs', return_value='<tok1>'):
+            result = one_step_model.sample_token_adjusted(
+                top_k=2,
+                top_p=1.0,
+                adjust_fn=lambda ctx: ctx.token_probs,
+            )
+
+        one_step_model._llm.eval.assert_not_called()
+        assert result['sampled_token'] is None
+        assert result['sampled_token_is_terminal'] is True

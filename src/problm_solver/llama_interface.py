@@ -345,7 +345,12 @@ class ModelInstance:
         logprobs: npt.NDArray[np.float64],
         n: int,
     ) -> list[tuple[int, float]]:
-        """Return top-n ``(token_id, logprob)`` pairs ordered descending by logprob."""
+        """Return top-k ``(token_id, logprob)`` pairs ordered descending by logprob.
+
+        :param logprobs: Full vocabulary array of log-probabilities as
+            returned by :meth:`_log_softmax`
+        :param n: number of ``(token_id, logprob)`` pairs to return.
+        """
         n = min(n, len(logprobs))
         top_indices = np.argpartition(logprobs, -n)[-n:]
         top_indices = top_indices[np.argsort(logprobs[top_indices])[::-1]]
@@ -456,7 +461,7 @@ class ModelInstance:
                 sampling_method = adjust_fn.__class__.__name__
             else:
                 sampling_method = getattr(adjust_fn, '__name__', type(adjust_fn).__name__)
-        if top_p >= 1.:
+        if top_p == 1.:
             candidate_generator = self._top_k_from_logprobs
         elif top_p > 0.:
             def candidate_generator(logprobs: npt.NDArray[np.float64], top_k: int) -> dict[str, float]:
@@ -566,6 +571,146 @@ class ModelInstance:
         )
 
 
+    def sample_token_adjusted(
+        self,
+        top_k: int,
+        top_p: float,
+        adjust_fn: AdjustFn,
+        *,
+        use_live_state: bool = True,
+        context_tokens: list[int] | None = None,
+        prev_probs: list[float] | None = None,
+        commit_token: bool = True,
+    ) -> dict[str, Any]:
+        """Sample exactly one token from an adjusted next-token distribution.
+
+        This method is optimised for iterative decoding: when ``use_live_state``
+        is ``True`` and the model already has decoded tokens
+        (``self._llm.n_tokens > 0``), it *does not* rebuild prompt/KV state and
+        samples directly from the current live logits.
+
+        Fallback behaviour:
+        - if ``use_live_state=False``: always rebuild state from
+          ``context_tokens`` (if provided) or the formatted prompt.
+        - if ``use_live_state=True`` but no live state exists: rebuild from
+          ``context_tokens`` or the formatted prompt.
+
+        :param top_k: Number of top-k tokens to consider.
+        :param top_p: Nucleus threshold in ``(0, 1]``.
+        :param adjust_fn: Function that adjusts candidate token log-probabilities.
+        :param use_live_state: Prefer sampling from current live model state.
+        :param context_tokens: Optional explicit context token IDs to evaluate
+            when rebuilding state.
+        :param prev_probs: Optional previously sampled token probabilities,
+            passed through to ``GenerationContext``.
+        :param commit_token: Whether to append the sampled token to the live
+            model state via ``eval(token_ids)`` when non-terminal.
+        :returns: A dictionary containing candidate distributions before/after
+            adjustment and details of the sampled token.
+        """
+        if not self._logits_all:
+            msg = (
+                'sample_token_adjusted() requires logits_all=True when constructing '
+                'ModelInstance so per-token logits are available.'
+            )
+            raise ValueError(msg)
+
+        if top_p == 1.0:
+            candidate_generator = self._top_k_from_logprobs
+        elif top_p > 0.0:
+            def candidate_generator(logprobs: npt.NDArray[np.float64], k: int) -> dict[str, float]:
+                return self._candidates_from_logprobs(logprobs, k, top_p)
+        else:
+            msg = f'top_p must be in (0, 1], got {top_p}'
+            raise ValueError(msg)
+
+        state_source: str
+        effective_context_tokens: list[int] | None
+        if use_live_state and self._llm.n_tokens > 0:
+            state_source = 'live'
+            effective_context_tokens = None
+        else:
+            self._llm.reset()
+            if context_tokens is None:
+                effective_context_tokens = self._format_chat_prompt()
+                state_source = 'prompt'
+            else:
+                effective_context_tokens = list(context_tokens)
+                state_source = 'context_tokens'
+            self._llm.eval(effective_context_tokens)
+
+        logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+        top_k_lp = candidate_generator(logprobs, top_k)
+
+        if len(top_k_lp) == 1:
+            adjusted = dict(top_k_lp)
+        else:
+            pre_adjust_state = self.save_live_state()
+            ctx = GenerationContext(
+                token_probs=top_k_lp,
+                prev_probs=list(prev_probs) if prev_probs is not None else [],
+                context_tokens=list(effective_context_tokens) if effective_context_tokens is not None else [],
+                query_next=lambda ctx_ids: (
+                    self.query_log_probs_next_token(ctx_ids, top_k).top_k_tokens
+                ),
+                query_branch=self.query_branch,
+                tokenize_token=lambda s: self._llm.tokenize(
+                    s.encode('utf-8'), add_bos=False, special=False,
+                ),
+                base_live_state=pre_adjust_state,
+                query_next_ids_from_live=lambda n: self._top_k_ids_from_logprobs(
+                    self._log_softmax(self._llm.scores[self._llm.n_tokens - 1]),
+                    n,
+                ),
+                save_live_state=self.save_live_state,
+                load_live_state=self.load_live_state,
+                eval_tokens=self._llm.eval,
+            )
+            adjusted = adjust_fn(ctx)
+            self.load_live_state(pre_adjust_state)
+
+        if not adjusted:
+            msg = 'adjust_fn returned an empty token distribution.'
+            raise ValueError(msg)
+
+        token_str = sample_from_logprobs(adjusted)
+        token_prob = float(prob_of_token(token_str, adjusted))
+        token_logprob = float(adjusted[token_str])
+
+        token_ids = self._llm.tokenize(
+            token_str.encode('utf-8'), add_bos=False, special=True,
+        )
+        eos_id = self._llm.token_eos()
+        sampled_is_terminal = (not token_ids) or (eos_id in token_ids)
+
+        if commit_token and not sampled_is_terminal:
+            self._llm.eval(token_ids)
+
+
+        sampled_token: dict[str, Any] | None
+        if sampled_is_terminal:
+            sampled_token = None
+        else:
+            sampled_token = {
+                'token': token_str,
+                'token_ids': token_ids,
+                'logprob': token_logprob,
+                'prob': token_prob,
+            }
+
+        return {
+            'state_source': state_source,
+            'used_live_state': state_source == 'live',
+            'top_k': int(top_k),
+            'top_p': float(top_p),
+            'candidates_before_adjustment': _serialise_candidates(top_k_lp),
+            'candidates_after_adjustment': _serialise_candidates(adjusted),
+            'sampled_token': sampled_token,
+            'sampled_token_is_terminal': sampled_is_terminal,
+            'context_tokens_used_for_eval': effective_context_tokens,
+        }
+
+
 ## -- Testing on datasets -- ##
 
     def test_dataset_adjusted(
@@ -586,3 +731,16 @@ class ModelInstance:
             answers.append(''.join(out.response_probabilities[0]))
             _logger.info('Completed problem: %d/%d', ii + 1, n_problems)
         return answers
+
+
+## -- Module Helpers -- ##
+
+def _serialise_candidates(lp_map: dict[str, float]) -> list[dict[str, float | str]]:
+    return [
+        {
+            'token': tok,
+            'logprob': float(lp),
+            'prob': float(prob_of_token(tok, lp_map)),
+        }
+        for tok, lp in lp_map.items()
+    ]
