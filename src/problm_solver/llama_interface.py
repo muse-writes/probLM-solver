@@ -100,12 +100,15 @@ class ModelInstance:
         return np.array([self.query() for _ in range(n)], dtype=str)
 
 
-    def query(self, rng: np.random.Generator | int | None = None) -> str:
+    def query(
+        self,
+        max_tokens: int = 512,
+        rng: np.random.Generator | int | None = None
+    ) -> str:
         """Query the LLM once.
 
         :returns: the response string.
         """
-        max_tokens = 512 # TODO(Clio): Remove hard-coded maximum here.
         prompt_tokens = self._format_chat_prompt()
         self._llm.reset()
         self._llm.eval(prompt_tokens)
@@ -225,10 +228,10 @@ class ModelInstance:
         self._llm.reset()
         self._llm.eval(context_tokens)
 
-        # Snapshot the KV cache and logits immediately after evaluating the
-        # context.  Restoring this state before generation ensures the branch
-        # always starts from the clean post-context position and is not
-        # affected by any internal bookkeeping inside save_live_state.
+# Snapshot the KV cache and logits immediately after evaluating the
+# context.  Restoring this state before generation ensures the branch
+# always starts from the clean post-context position and is not
+# affected by any internal bookkeeping inside save_live_state.
         pre_branch_state = self.save_live_state()
         self.load_live_state(pre_branch_state)
 
@@ -237,13 +240,13 @@ class ModelInstance:
         rng = _as_rng(rng)
 
         for _ in range(max_tokens):
-            # scores[n_tokens - 1] is the most recently decoded logit row,
-            # valid for logits_all=True (filled by eval's n_past slice).
+# scores[n_tokens - 1] is the most recently decoded logit row,
+# valid for logits_all=True (filled by eval's n_past slice).
             logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
 
-            # Gumbel-max trick: argmax(log p + Gumbel(0,1)) is equivalent to
-            # drawing from categorical(softmax(log p)) without materialising
-            # the full probability vector.
+# Gumbel-max trick: argmax(log p + Gumbel(0,1)) is equivalent to
+# drawing from categorical(softmax(log p)) without materialising
+# the full probability vector.
             next_id = int(np.argmax(logprobs + rng.gumbel(size=len(logprobs))))
 
             if next_id == eos_id:
