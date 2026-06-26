@@ -20,6 +20,7 @@ from problm_solver.data import (
     LLMOutputDataFull,
     LLMTokenData,
 )
+from problm_solver.random import RandomManager, RNGLike, resolve_rng
 from problm_solver.utils import _as_rng
 
 # -- Module-wide setup -- #
@@ -35,13 +36,17 @@ ADEQUATE_TOPP = 0.8
 class ModelInstance:
     """Keeps a model instance and its context, with methods for querying the Llama instance."""
 
-    def __init__(
+    def __init__( # noqa: PLR0913
         self,
         fname: str,
         context: str,
         n_ctx: int = 4096,
         logits_all: bool = False, # noqa: FBT001 FBT002
-        n_gpu_layers: int = 0
+        n_gpu_layers: int = 0,
+        *,
+        rng: RNGLike = None,
+        random_manager: RandomManager | None = None,
+        seed: int | None = None
     ) -> None:
         """Initialize Llama instance and store context.
 
@@ -76,6 +81,7 @@ class ModelInstance:
         self._logits_all = logits_all
         _logger.info('Model %r loaded.', fname)
 
+# Calculate number of bytes needed in Llama cache.
         arch = self._llm.metadata['general.architecture']
         n_layers = int(self._llm.metadata[f'{arch}.block_count'])
         n_kv_heads = int(self._llm.metadata[f'{arch}.attention.head_count_kv'])
@@ -83,10 +89,14 @@ class ModelInstance:
         head_dim = int(self._llm.metadata[f'{arch}.embedding_length']) // n_heads
         bytes_per_state = self._llm.n_ctx() * 2 * n_layers * n_kv_heads * head_dim * 2
 
+# Initialise and set cache and context.
         self._cache = LlamaRAMCache(capacity_bytes=4 * bytes_per_state)
         self._llm.set_cache(self._cache)
         self.context = context
         self._initial_context_length: int = len(self.context)
+
+# Set up RNG handling.
+#       self._rng = resolve_rng(rng, stream='global')
 
 
 ## -- Methods for querying the LLM. -- ##
