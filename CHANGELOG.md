@@ -1,3 +1,33 @@
+## v1.4.0 (2026-06-29)
+
+### BREAKING CHANGE
+
+- parameters in `generate_adjusted` have been renamed.
+`top_p` is not optional.
+
+### Feat
+
+- **random**: unify RNGLike APIs and add reproducibility tutorial
+- RNG handling module added, with options for stream management.
+- `max_tokens` in model query is now an optional argument
+- Added `sample_token_adjusted()` for single token sampling.
+- `generate_adjusted()` now only adjusts for many candidate tokens.
+- Added `n_gpu_layers` as an argument to be passed to `Llama`.
+- `BeamSampler` now uses proper KV-cache saving and loading.
+- Implemented bare bones beam search algorithm for branch weights.
+- Can now point `get_math500` etc. to a local jsonl file.
+- Added `environment.yml` and poe task for conda installation.
+- Added scripting support for downloading an testing MATH500.
+- Added support for top-p sampling to `generate_adjusted()`.
+
+### Fix
+
+- Type checking error in optional arguments of `score_future()`
+- `generate_adjusted()` now halts gracefully without logits enabled.
+- Improved upper limit on tokens in `ModelInstance`.
+- Removed early termination possibility in MCMC.
+- top-p now correctly listed as float rather than int in data.
+
 ## v1.3.0 (2026-05-14)
 
 ### Feat
