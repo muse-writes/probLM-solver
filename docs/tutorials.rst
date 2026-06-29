@@ -44,12 +44,13 @@ A simple script for setting up a model, and generating a response with low-tempe
 
    temp = 0.5
    top_k = 8
+   top_p = 0.9
    model = ModelInstance('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
 
    sampling_func = SampleLowTemp(alpha=1./temp)
    data = model.generate_adjusted(
        top_k=top_k,
-       top_p=0.9,
+       top_p=top_p,
        adjust_fn=sampling_func,
        max_tokens=128
    )
@@ -82,6 +83,36 @@ This dictionary is an instance of ``problm_solver.data.LLMOutputDataFull``, and 
    data.response_topk # The top-k candidate tokens at each step, and their logarithmic probabilities.
    data.sampling_method # User defined label for the method used.
    data.branch_sampler # User defined label for the branch sampler used. (More on that later.)
+
+
+Sampling Token-by-token
+-----------------------
+
+The previous section introduced the function :meth:`generate_adjusted()` to generate outputs based on a provided context and sampling function.
+It may sometimes be desirable for the user to generate one token at a time, to either switch sampling functions out or analyse specific probabilities.
+This is where the method :meth:`ModelInstance.sample_token_adjusted()` is used.
+See the following example:
+
+.. sourcecode:: python
+   :linenos:
+   :name: sample-token
+
+   from problm_solver.adjust_probs import SampleLowTemp
+   from problm_solver.llama_interface import ModelInstance
+
+   temp = 0.5
+   top_k = 30
+   top_p = 0.9
+   model = ModelInstance('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
+
+   sampling_func = SampleLowTemp(alpha=1./temp)
+   token_data = model.sample_token_adjusted(
+       top_k=top_k,
+       top_p=top_p,
+       adjust_fn=sampling_func,
+   )
+
+Where ``token_data`` is a dictionary of useful quantities, including candidate probabilities before and after adjustment (``token_data['candidates_before_adjustment']`` and ``token_data['candidates_after_adjustment']`` respectively) and the sampled token  and its probability, ``token_data['sampled_token']``.
 
 
 Sampling from the Power Distribution
