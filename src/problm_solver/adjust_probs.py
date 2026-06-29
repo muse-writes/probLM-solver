@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 from tqdm import tqdm
 
-from problm_solver.utils import _as_rng
+from problm_solver.random import RNGLike, resolve_rng
 
 # -- Module-wide setup -- #
 
@@ -195,14 +195,14 @@ class MetropolisSampler(BranchSampler):
         equil_branches: int = 5,
         max_branches: int = 30,
         tolerance: float = 1e-1,
-        rng: np.random.Generator | int | None = None
+        rng: RNGLike = None
     ) -> None:
         """Initialise with convergence parameters."""
         self._current_log_prob: float | None = None
         self._equil_branches = equil_branches
         self._max_branches = max_branches
         self._tolerance = tolerance
-        self._rng = _as_rng(rng)
+        self._rng = resolve_rng(rng, stream='adjust.metropolis')
 
     def reset(self) -> None:
         """Clear chain state before starting a new candidate-token chain."""

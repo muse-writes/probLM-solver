@@ -20,8 +20,7 @@ from problm_solver.data import (
     LLMOutputDataFull,
     LLMTokenData,
 )
-from problm_solver.random import RandomManager, RNGLike, resolve_rng
-from problm_solver.utils import _as_rng
+from problm_solver.random import RNGLike, resolve_rng
 
 # -- Module-wide setup -- #
 
@@ -45,8 +44,6 @@ class ModelInstance:
         n_gpu_layers: int = 0,
         *,
         rng: RNGLike = None,
-        random_manager: RandomManager | None = None,
-        seed: int | None = None
     ) -> None:
         """Initialize Llama instance and store context.
 
@@ -70,6 +67,8 @@ class ModelInstance:
         :param logits_all: whether or not probability logging is necessary in the Llama instance.
         :param n_gpu_layers: number of GPU layers to pass to Llama. Required for GPU accelerated
             jobs, set to 0 otherwise.
+        :param rng: Optional random source. May be a ``numpy.random.Generator``,
+            integer seed, or ``RandomManager``.
         """
         self._llm = Llama(
             model_path=fname,
@@ -96,7 +95,7 @@ class ModelInstance:
         self._initial_context_length: int = len(self.context)
 
 # Set up RNG handling.
-#       self._rng = resolve_rng(rng, stream='global')
+        self._rng = resolve_rng(rng, stream='global')
 
 
 ## -- Methods for querying the LLM. -- ##
@@ -113,7 +112,7 @@ class ModelInstance:
     def query(
         self,
         max_tokens: int = 512,
-        rng: np.random.Generator | int | None = None
+        rng: RNGLike = None
     ) -> str:
         """Query the LLM once.
 
@@ -123,10 +122,13 @@ class ModelInstance:
         self._llm.reset()
         self._llm.eval(prompt_tokens)
         tokens = []
-        rng = _as_rng(rng)
+        method_rng = resolve_rng(
+            self._rng if rng is None else rng,
+            stream='llama.query',
+        )
         for _ in range(max_tokens):
             logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
-            next_id = int(np.argmax(logprobs + rng.gumbel(size=len(logprobs))))
+            next_id = int(np.argmax(logprobs + method_rng.gumbel(size=len(logprobs))))
             if next_id == self._llm.token_eos():
                 break
             tokens.append(next_id)
@@ -144,7 +146,7 @@ class ModelInstance:
         return LLMOutputData(prompt=self.context, data=data)
 
 
-    def query_log_probs(self, rng: np.random.Generator | int | None = None) -> LLMTokenData:
+    def query_log_probs(self, rng: RNGLike = None) -> LLMTokenData:
         """Query the model and return the response as tokens with probabilities.
 
         Evaluates the formatted prompt in a single forward pass, then samples
@@ -163,10 +165,13 @@ class ModelInstance:
         tokens: TokenSequence = []
         probs: list[float] = []
         eos_id = self._llm.token_eos()
-        rng = _as_rng(rng)
+        method_rng = resolve_rng(
+            self._rng if rng is None else rng,
+            stream='llama.query_log_probs',
+        )
         for _ in range(max_tokens):
             logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
-            next_id = int(np.argmax(logprobs + rng.gumbel(size=len(logprobs))))
+            next_id = int(np.argmax(logprobs + method_rng.gumbel(size=len(logprobs))))
             if next_id == eos_id:
                 break
             tokens.append(self._tokens_as_strings([next_id])[0])
@@ -211,7 +216,7 @@ class ModelInstance:
         self,
         context_tokens: list[int],
         max_tokens: int,
-        rng: np.random.Generator | int | None = None
+        rng: RNGLike = None
     ) -> float:
         """Generate a branch of up to max_tokens and return its total log-probability.
 
@@ -247,7 +252,10 @@ class ModelInstance:
 
         eos_id = self._llm.token_eos()
         total_log_prob = 0.0
-        rng = _as_rng(rng)
+        method_rng = resolve_rng(
+            self._rng if rng is None else rng,
+            stream='llama.query_branch',
+        )
 
         for _ in range(max_tokens):
 # scores[n_tokens - 1] is the most recently decoded logit row,
@@ -257,7 +265,7 @@ class ModelInstance:
 # Gumbel-max trick: argmax(log p + Gumbel(0,1)) is equivalent to
 # drawing from categorical(softmax(log p)) without materialising
 # the full probability vector.
-            next_id = int(np.argmax(logprobs + rng.gumbel(size=len(logprobs))))
+            next_id = int(np.argmax(logprobs + method_rng.gumbel(size=len(logprobs))))
 
             if next_id == eos_id:
                 break
@@ -443,6 +451,7 @@ class ModelInstance:
         alpha: float = 1.0,
         sampling_method: str | None = None,
         branch_sampler: str | None = None,
+        rng: RNGLike = None,
     ) -> LLMOutputDataFull:
         """Generate a response token-by-token with adjusted next-token probabilities.
 
@@ -508,6 +517,10 @@ class ModelInstance:
         self._llm.eval(context)
 
 # Main generation loop.
+        method_rng = resolve_rng(
+            self._rng if rng is None else rng,
+            stream='llama.generate_adjusted',
+        )
         for step in tqdm(range(max_tokens), desc='generate_adjusted', unit='tok'):
 
 # Determine logprobs and sample intersection of top-k and top-p.
@@ -528,7 +541,11 @@ class ModelInstance:
                     query_next=lambda ctx_ids: (
                         self.query_log_probs_next_token(ctx_ids, top_k).top_k_tokens
                     ),
-                    query_branch=self.query_branch,
+                    query_branch=lambda ctx_ids, depth: self.query_branch(
+                        ctx_ids,
+                        depth,
+                        rng=method_rng,
+                    ),
                     tokenize_token=lambda s: self._llm.tokenize(
                         s.encode('utf-8'), add_bos=False, special=False,
                     ),
@@ -543,7 +560,7 @@ class ModelInstance:
                 )
                 adjusted = adjust_fn(ctx)
                 self.load_live_state(pre_adjust_state)
-                token_str = sample_from_logprobs(adjusted)
+                token_str = sample_from_logprobs(adjusted, rng=method_rng)
                 token_prob = float(prob_of_token(token_str, adjusted))
 
 # Tokenize str for checks.
@@ -594,6 +611,7 @@ class ModelInstance:
         context_tokens: list[int] | None = None,
         prev_probs: list[float] | None = None,
         commit_token: bool = True,
+        rng: RNGLike = None,
     ) -> dict[str, Any]:
         """Sample exactly one token from an adjusted next-token distribution.
 
@@ -637,6 +655,11 @@ class ModelInstance:
             msg = f'top_p must be in (0, 1], got {top_p}'
             raise ValueError(msg)
 
+        method_rng = resolve_rng(
+            self._rng if rng is None else rng,
+            stream='llama.sample_token_adjusted',
+        )
+
         state_source: str
         effective_context_tokens: list[int] | None
         if use_live_state and self._llm.n_tokens > 0:
@@ -666,7 +689,11 @@ class ModelInstance:
                 query_next=lambda ctx_ids: (
                     self.query_log_probs_next_token(ctx_ids, top_k).top_k_tokens
                 ),
-                query_branch=self.query_branch,
+                query_branch=lambda ctx_ids, depth: self.query_branch(
+                    ctx_ids,
+                    depth,
+                    rng=method_rng,
+                ),
                 tokenize_token=lambda s: self._llm.tokenize(
                     s.encode('utf-8'), add_bos=False, special=False,
                 ),
@@ -686,7 +713,7 @@ class ModelInstance:
             msg = 'adjust_fn returned an empty token distribution.'
             raise ValueError(msg)
 
-        token_str = sample_from_logprobs(adjusted)
+        token_str = sample_from_logprobs(adjusted, rng=method_rng)
         token_prob = float(prob_of_token(token_str, adjusted))
         token_logprob = float(adjusted[token_str])
 

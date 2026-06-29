@@ -15,6 +15,7 @@ Tutorial Pages
 .. toctree::
    :maxdepth: 1
 
+   reproducibility_tutorial
    r_tutorial
 
 CLI

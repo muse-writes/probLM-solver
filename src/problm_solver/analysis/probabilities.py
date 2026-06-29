@@ -3,7 +3,7 @@
 
 import numpy as np
 
-from problm_solver.utils import _as_rng
+from problm_solver.random import RNGLike, resolve_rng
 
 
 def prob_of_token(token: str, log_probs: dict[str, float]) -> float:
@@ -29,7 +29,7 @@ def prob_of_token(token: str, log_probs: dict[str, float]) -> float:
 
 def sample_from_logprobs(
     log_probs: dict[str, float],
-    rng: np.random.Generator | int | None = None
+    rng: RNGLike = None
 ) -> str:
     """Sample a token from a log-probability distribution.
 
@@ -46,6 +46,6 @@ def sample_from_logprobs(
     lp -= lp.max()  # shift for numerical stability before exp
     probs = np.exp(lp)
     probs /= probs.sum()
-    rng = _as_rng(rng)
-    idx: int = int(rng.choice(len(tokens), p=probs))
+    method_rng = resolve_rng(rng, stream='analysis.sample_from_logprobs')
+    idx: int = int(method_rng.choice(len(tokens), p=probs))
     return tokens[idx]
