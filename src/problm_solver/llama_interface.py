@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from problm_solver.adjust_probs import AdjustFn, GenerationContext
 from problm_solver.analysis.probabilities import prob_of_token, sample_from_logprobs
+from problm_solver.candidates import CandidateGeneratorFactory, CandidateTokens
 from problm_solver.data import (
     Hyperparams,
     LLMNextTokenData,
@@ -96,6 +97,7 @@ class ModelInstance:
 
 # Set up RNG handling.
         self._rng = resolve_rng(rng, stream='global')
+        self._candidate_factory = CandidateGeneratorFactory()
 
 
 ## -- Methods for querying the LLM. -- ##
@@ -188,8 +190,9 @@ class ModelInstance:
         """Return the top-k most likely next tokens and their log-probabilities.
 
         Resets the model state, evaluates ``context_tokens`` in a single
-        forward pass, applies log-softmax to the last-position logits, and
-        returns the top ``n_tokens`` candidates via :meth:`_top_k_from_logprobs`.
+        forward pass, applies log-softmax to the last-position logits, selects
+        candidate IDs via :class:`CandidateGeneratorFactory`, and converts only
+        those selected IDs to token strings.
 
         EOS detection is the caller's responsibility: the EOS token will
         appear naturally in the returned distribution when the model prefers
@@ -204,7 +207,9 @@ class ModelInstance:
         self._llm.reset()
         self._llm.eval(context_tokens)
         logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
-        top_k = self._top_k_from_logprobs(logprobs, n_tokens)
+        generator = self._candidate_factory.get_candidate_generator(top_k=n_tokens, top_p=1.0)
+        candidates = generator(logprobs)
+        top_k = self._candidate_tokens_to_logprob_map(candidates)
         return LLMNextTokenData(
             prompt=self.context,
             output_vec=context_tokens,
@@ -338,6 +343,33 @@ class ModelInstance:
             for tid in token_ids
         ]
 
+    def _candidate_tokens_to_logprob_map(
+        self,
+        candidates: CandidateTokens,
+    ) -> dict[str, float]:
+        """Convert candidate IDs/logprobs to a string-keyed log-probability map."""
+        ids = candidates.candidate_ids.tolist()
+        toks = self._tokens_as_strings(ids)
+        return {
+            tok: float(lp)
+            for tok, lp in zip(toks, candidates.candidate_logprobs, strict=True)
+        }
+
+    def _candidate_tokens_to_logprob_map_with_ids(
+        self,
+        candidates: CandidateTokens,
+    ) -> tuple[dict[str, float], dict[str, int]]:
+        """Convert candidates to token->logprob plus token->id lookup."""
+        ids = candidates.candidate_ids.tolist()
+        toks = self._tokens_as_strings(ids)
+
+        token_probs: dict[str, float] = {}
+        token_to_id: dict[str, int] = {}
+        for tok, tid, lp in zip(toks, ids, candidates.candidate_logprobs, strict=True):
+            token_probs[tok] = float(lp)
+            token_to_id.setdefault(tok, int(tid))
+        return token_probs, token_to_id
+
 
     @staticmethod
     def _log_softmax(logits: npt.NDArray[np.float32]) -> npt.NDArray[np.float64]:
@@ -361,8 +393,8 @@ class ModelInstance:
         return shifted - np.log(np.exp(shifted).sum())
 
 
-    @staticmethod
     def _top_k_ids_from_logprobs(
+        self,
         logprobs: npt.NDArray[np.float64],
         n: int,
     ) -> list[tuple[int, float]]:
@@ -372,71 +404,16 @@ class ModelInstance:
             returned by :meth:`_log_softmax`
         :param n: number of ``(token_id, logprob)`` pairs to return.
         """
-        n = min(n, len(logprobs))
-        top_indices = np.argpartition(logprobs, -n)[-n:]
-        top_indices = top_indices[np.argsort(logprobs[top_indices])[::-1]]
-        return [(int(idx), float(logprobs[idx])) for idx in top_indices]
-
-    def _top_k_from_logprobs(
-        self,
-        logprobs: npt.NDArray[np.float64],
-        n: int,
-    ) -> dict[str, float]:
-        """Return the top-n tokens and their log-probabilities from a full-vocabulary array.
-
-        Uses ``numpy.argpartition`` for O(V) selection, then sorts the
-        selected indices so the returned dict is ordered from highest to
-        lowest log-probability (Python 3.7+ dict insertion order).
-        Token IDs are converted to strings via :meth:`_tokens_as_strings`.
-
-        If ``n`` exceeds the vocabulary size it is silently clamped so that
-        all tokens are returned.
-
-        :param logprobs: 1-D log-probability array over the full vocabulary,
-            as returned by :meth:`_log_softmax`.
-        :param n: Number of top candidates to return.
-        :returns: ``{token_string: log_prob}`` for the *n* most probable
-            tokens, ordered from highest to lowest log-probability.
-        """
-        n = min(n, len(logprobs))
-        top_indices = np.argpartition(logprobs, -n)[-n:]
-        top_indices = top_indices[np.argsort(logprobs[top_indices])[::-1]]
-        token_strings = self._tokens_as_strings(top_indices.tolist())
-        return {s: float(logprobs[idx]) for s, idx in zip(token_strings, top_indices, strict=True)}
-
-
-    def _candidates_from_logprobs(
-        self,
-        logprobs: npt.NDArray[np.float64],
-        top_k: int,
-        top_p: float
-    ) -> dict[str, float]:
-        """Return the most probable tokens using top-k and top-p params from the vocabulary.
-
-        Similar to ``_top_k_from_logprobs`` but after acquiring the top-k log-probabilities, it
-        only returns the smallest number of tokens whose probabilities sum to more than top-p.
-        If there are more than ``top_k`` tokens required to make up the ``top_p`` probabilities, it
-        just returns all top-k tokens.
-
-        :param logprobs: 1-D log-probability array over the full vocabulary,
-            as returned by :meth:`_log_softmax`.
-        :param top_k: Number of top candidates to return.
-        :param top_p: Total probability of candidate tokens.
-        :returns: ``{token_string: log_prob}`` for the *n* most probable
-            tokens, ordered from highest to lowest log-probability.
-        """
-        top_k = min(top_k, len(logprobs))
-        top_indices = np.argpartition(logprobs, -top_k)[-top_k:]
-        top_indices = top_indices[np.argsort(logprobs[top_indices])[::-1]]
-        token_strings = self._tokens_as_strings(top_indices.tolist())
-        tokens_out = {}
-        total_prob = 0
-        for s, idx in zip(token_strings, top_indices, strict=True):
-            tokens_out[s] = float(logprobs[idx])
-            total_prob += np.exp(logprobs[idx])
-            if total_prob > top_p:
-                break
-        return tokens_out
+        generator = self._candidate_factory.get_candidate_generator(top_k=n, top_p=1.0)
+        candidates = generator(logprobs)
+        return [
+            (int(idx), float(lp))
+            for idx, lp in zip(
+                candidates.candidate_ids,
+                candidates.candidate_logprobs,
+                strict=True,
+            )
+        ]
 
 
 ## -- Adjusting probabilities -- ##
@@ -483,14 +460,7 @@ class ModelInstance:
                 sampling_method = adjust_fn.__class__.__name__
             else:
                 sampling_method = getattr(adjust_fn, '__name__', type(adjust_fn).__name__)
-        if top_p == 1.:
-            candidate_generator = self._top_k_from_logprobs
-        elif top_p > 0.:
-            def candidate_generator(logprobs: npt.NDArray[np.float64], top_k: int) -> dict[str, float]:
-                return self._candidates_from_logprobs(logprobs, top_k, top_p)
-        else:
-            msg = f'top_p must be in (0, 1], got {top_p}'
-            raise ValueError(msg)
+        candidate_generator = self._candidate_factory.get_candidate_generator(top_k, top_p)
 
 # Parameter warnings.
         _logger.info('Generation with adjusted probabilities started')
@@ -525,13 +495,14 @@ class ModelInstance:
 
 # Determine logprobs and sample intersection of top-k and top-p.
             logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
-            top_k_lp = candidate_generator(logprobs, top_k)
+            candidates = candidate_generator(logprobs)
+            top_k_lp, token_to_id = self._candidate_tokens_to_logprob_map_with_ids(candidates)
 
 # Skip adjustment and sampling if only one logprob.
             if len(top_k_lp) == 1:
                 token_str, _ = next(iter(top_k_lp.items()))
                 token_prob = 1.
-                adjusted = { token_str: token_prob }
+                adjusted = {token_str: token_prob}
             else:
                 pre_adjust_state = self.save_live_state()
                 ctx = GenerationContext(
@@ -563,10 +534,14 @@ class ModelInstance:
                 token_str = sample_from_logprobs(adjusted, rng=method_rng)
                 token_prob = float(prob_of_token(token_str, adjusted))
 
-# Tokenize str for checks.
-            token_ids = self._llm.tokenize(
-                token_str.encode('utf-8'), add_bos=False, special=True,
-            )
+# Resolve sampled token IDs for EOS checks and optional commit.
+            sampled_id = token_to_id.get(token_str)
+            if sampled_id is not None:
+                token_ids = [sampled_id]
+            else:
+                token_ids = self._llm.tokenize(
+                    token_str.encode('utf-8'), add_bos=False, special=True,
+                )
 
 # Check for end, call eval() if continuing.
             if not token_ids or eos_id in token_ids:
@@ -646,14 +621,7 @@ class ModelInstance:
             )
             raise ValueError(msg)
 
-        if top_p == 1.0:
-            candidate_generator = self._top_k_from_logprobs
-        elif top_p > 0.0:
-            def candidate_generator(logprobs: npt.NDArray[np.float64], k: int) -> dict[str, float]:
-                return self._candidates_from_logprobs(logprobs, k, top_p)
-        else:
-            msg = f'top_p must be in (0, 1], got {top_p}'
-            raise ValueError(msg)
+        candidate_generator = self._candidate_factory.get_candidate_generator(top_k, top_p)
 
         method_rng = resolve_rng(
             self._rng if rng is None else rng,
@@ -676,7 +644,8 @@ class ModelInstance:
             self._llm.eval(effective_context_tokens)
 
         logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
-        top_k_lp = candidate_generator(logprobs, top_k)
+        candidates = candidate_generator(logprobs)
+        top_k_lp, token_to_id = self._candidate_tokens_to_logprob_map_with_ids(candidates)
 
         if len(top_k_lp) == 1:
             adjusted = dict(top_k_lp)
@@ -685,7 +654,11 @@ class ModelInstance:
             ctx = GenerationContext(
                 token_probs=top_k_lp,
                 prev_probs=list(prev_probs) if prev_probs is not None else [],
-                context_tokens=list(effective_context_tokens) if effective_context_tokens is not None else [],
+                context_tokens=(
+                    list(effective_context_tokens)
+                    if effective_context_tokens is not None
+                    else []
+                ),
                 query_next=lambda ctx_ids: (
                     self.query_log_probs_next_token(ctx_ids, top_k).top_k_tokens
                 ),
@@ -717,9 +690,13 @@ class ModelInstance:
         token_prob = float(prob_of_token(token_str, adjusted))
         token_logprob = float(adjusted[token_str])
 
-        token_ids = self._llm.tokenize(
-            token_str.encode('utf-8'), add_bos=False, special=True,
-        )
+        sampled_id = token_to_id.get(token_str)
+        if sampled_id is not None:
+            token_ids = [sampled_id]
+        else:
+            token_ids = self._llm.tokenize(
+                token_str.encode('utf-8'), add_bos=False, special=True,
+            )
         eos_id = self._llm.token_eos()
         sampled_is_terminal = (not token_ids) or (eos_id in token_ids)
 
