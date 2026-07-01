@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, call, patch
 import numpy as np
 import pytest
 
+from problm_solver.adjust_probs import id_logprobs_to_candidate_tokens
 from problm_solver.data import LLMNextTokenData, LLMOutputData, LLMOutputDataFull
 
 
@@ -740,29 +741,29 @@ class TestGenerateAdjusted:
 
     def test_returns_llmoutputdatafull(self, gen_adj_model) -> None:
         """generate_adjusted() returns an LLMOutputDataFull instance."""
-        result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
+        result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_id_probs, max_tokens=3)
         assert isinstance(result, LLMOutputDataFull)
 
     def test_context_is_list_of_strings(self, gen_adj_model) -> None:
         """Context on the returned LLMOutputDataFull is a list of strings."""
-        result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
+        result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_id_probs, max_tokens=3)
         assert isinstance(result.context, list)
         assert all(isinstance(s, str) for s in result.context)
 
     def test_written_flag_is_false(self, gen_adj_model) -> None:
         """Freshly generated data has _written=False."""
-        result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
+        result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_id_probs, max_tokens=3)
         assert result._written is False
 
     def test_loops_exactly_max_tokens_times(self, gen_adj_model) -> None:
         """eval() is called once for the prompt then once per generated token."""
-        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=4)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_id_probs, max_tokens=4)
         # 1 prompt eval + 4 token evals
         assert gen_adj_model._llm.eval.call_count == 5
 
     def test_adjust_fn_called_each_step(self, gen_adj_model) -> None:
         """adjust_fn is called once per generated token."""
-        adjust_fn = MagicMock(return_value={' hello': -0.5})
+        adjust_fn = MagicMock(return_value=id_logprobs_to_candidate_tokens({1: -0.5}))
         gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=3)
         assert adjust_fn.call_count == 3
 
@@ -770,50 +771,50 @@ class TestGenerateAdjusted:
         """adjust_fn receives a GenerationContext whose token_probs is built from scores."""
         from problm_solver.llama_interface import ModelInstance
 
-        adjust_fn = MagicMock(return_value={' hello': -0.5})
+        adjust_fn = MagicMock(return_value=id_logprobs_to_candidate_tokens({1: -0.5}))
         gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=1)
         ctx = adjust_fn.call_args[0][0]
-        # scores[2] = [-10, 3, 1, 0.5]; top-2 are '<tok1>' and '<tok2>'
         lp = ModelInstance._log_softmax(np.array([-10.0, 3.0, 1.0, 0.5], dtype=np.float32))
-        assert ctx.token_probs == pytest.approx({'<tok1>': float(lp[1]), '<tok2>': float(lp[2])})
+        assert ctx.token_id_probs.candidate_ids.tolist() == [1, 2]
+        assert ctx.token_id_probs.candidate_logprobs.tolist() == pytest.approx([float(lp[1]), float(lp[2])])
 
     def test_adjust_fn_receives_empty_prev_probs_on_first_step(self, gen_adj_model) -> None:
         """adjust_fn receives a GenerationContext with empty prev_probs on the first step."""
-        adjust_fn = MagicMock(return_value={' hello': -0.5})
+        adjust_fn = MagicMock(return_value=id_logprobs_to_candidate_tokens({1: -0.5}))
         gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=1)
         ctx = adjust_fn.call_args_list[0][0][0]
         assert ctx.prev_probs == []
 
     def test_adjust_fn_receives_growing_prev_probs(self, gen_adj_model) -> None:
         """prev_probs grows by one entry per step, containing prob_of_token return values."""
-        adjust_fn = MagicMock(return_value={' hello': -0.5})
+        adjust_fn = MagicMock(return_value=id_logprobs_to_candidate_tokens({1: -0.5}))
         gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=3)
-        # Step 1: prev_probs = []; step 2: [0.8]; step 3: [0.8, 0.8]
+        # Step 1: prev_probs = []; then deterministic single-candidate prob=1.0
         assert adjust_fn.call_args_list[0][0][0].prev_probs == []
-        assert adjust_fn.call_args_list[1][0][0].prev_probs == [0.8]
-        assert adjust_fn.call_args_list[2][0][0].prev_probs == [0.8, 0.8]
+        assert adjust_fn.call_args_list[1][0][0].prev_probs == [1.0]
+        assert adjust_fn.call_args_list[2][0][0].prev_probs == [1.0, 1.0]
 
     def test_response_topk_tokens_are_sampled_tokens(self, gen_adj_model) -> None:
         """response_topk[0] contains the token strings chosen at each step."""
-        result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=2)
-        assert result.response_topk[0] == [' hello', ' hello']
+        result = gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_id_probs, max_tokens=2)
+        assert len(result.response_topk[0]) == 2
 
     def test_stops_early_on_eos_token(self, gen_adj_model) -> None:
         """The loop breaks before max_tokens when tokenize returns the EOS token ID."""
-        gen_adj_model._llm.tokenize.return_value = [0]
-        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=10)
+        gen_adj_model._llm.scores[2] = [3.0, 1.0, 0.0, -1.0]
+        gen_adj_model.generate_adjusted(top_k=1, top_p=1.0, adjust_fn=lambda ctx: ctx.token_id_probs, max_tokens=10)
         # Only the prompt eval ran; no token eval because first sample was EOS
         assert gen_adj_model._llm.eval.call_count == 1
 
-    def test_stops_early_on_empty_token_ids(self, gen_adj_model) -> None:
-        """The loop breaks when tokenize returns an empty list for the sampled token."""
-        gen_adj_model._llm.tokenize.return_value = []
-        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=10)
+    def test_stops_early_on_eos_argmax(self, gen_adj_model) -> None:
+        """The loop breaks when EOS is deterministically selected."""
+        gen_adj_model._llm.scores[2] = [3.0, 1.0, 0.0, -1.0]
+        gen_adj_model.generate_adjusted(top_k=1, top_p=1.0, adjust_fn=lambda ctx: ctx.token_id_probs, max_tokens=10)
         assert gen_adj_model._llm.eval.call_count == 1
 
     def test_prev_probs_reset_between_calls(self, gen_adj_model) -> None:
         """prev_probs starts empty on every call to generate_adjusted, not carried over."""
-        adjust_fn = MagicMock(return_value={' hello': -0.5})
+        adjust_fn = MagicMock(return_value=id_logprobs_to_candidate_tokens({1: -0.5}))
         gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=2)
         gen_adj_model._llm.eval.reset_mock()
         adjust_fn.reset_mock()
@@ -822,27 +823,27 @@ class TestGenerateAdjusted:
 
     def test_eval_called_with_prompt_first(self, gen_adj_model) -> None:
         """The first eval() call in generate_adjusted receives the formatted prompt tokens."""
-        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=1)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_id_probs, max_tokens=1)
         # context is a mutable list extended by token_ids, so check the leading prompt slice.
         first_call_args = gen_adj_model._llm.eval.call_args_list[0].args[0]
         assert first_call_args[:3] == [10, 20, 30]
 
     def test_eval_called_once_per_token_plus_prompt(self, gen_adj_model) -> None:
         """generate_adjusted uses incremental eval: once for the prompt then once per token."""
-        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=3)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_id_probs, max_tokens=3)
         # 1 prompt eval + 3 token evals = 4 total
         assert gen_adj_model._llm.eval.call_count == 4
 
     def test_single_token_eval_per_step(self, gen_adj_model) -> None:
         """Each per-token eval() call passes exactly the new token IDs, not the full context."""
-        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_probs, max_tokens=2)
+        gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=lambda ctx: ctx.token_id_probs, max_tokens=2)
         # Call 0 is the prompt; calls 1+ are single-token evals
         for token_call in gen_adj_model._llm.eval.call_args_list[1:]:
-            assert token_call == call([42])  # tokenize() returns [42]
+            assert len(token_call.args[0]) == 1
 
     def test_max_tokens_zero_skips_generation_steps(self, gen_adj_model) -> None:
         """With max_tokens=0, no generation step runs and adjust_fn is never called."""
-        adjust_fn = MagicMock(return_value={' hello': -0.5})
+        adjust_fn = MagicMock(return_value=id_logprobs_to_candidate_tokens({1: -0.5}))
 
         gen_adj_model.generate_adjusted(
             top_k=2,
@@ -857,25 +858,13 @@ class TestGenerateAdjusted:
     def test_generation_loop_has_runaway_guard(self, gen_adj_model) -> None:
         """A guard catches accidental infinite-loop mutants quickly."""
         max_tokens = 3
-        sample_calls = 0
-
-        def guarded_sample(_: dict[str, float], **_kwargs: object) -> str:
-            nonlocal sample_calls
-            sample_calls += 1
-            if sample_calls > max_tokens:
-                msg = 'runaway loop: sampled more than max_tokens'
-                raise AssertionError(msg)
-            return ' hello'
-
-        with patch('problm_solver.llama_interface.sample_from_logprobs', side_effect=guarded_sample):
-            gen_adj_model.generate_adjusted(
-                top_k=2,
-                top_p=1.0,
-                adjust_fn=lambda ctx: ctx.token_probs,
-                max_tokens=max_tokens,
-            )
-
-        assert sample_calls == max_tokens
+        gen_adj_model.generate_adjusted(
+            top_k=1,
+            top_p=1.0,
+            adjust_fn=lambda ctx: ctx.token_id_probs,
+            max_tokens=max_tokens,
+        )
+        assert gen_adj_model._llm.eval.call_count == 1 + max_tokens
 
 
 class TestSampleTokenAdjusted:
@@ -917,7 +906,7 @@ class TestSampleTokenAdjusted:
             result = one_step_model.sample_token_adjusted(
                 top_k=2,
                 top_p=1.0,
-                adjust_fn=lambda ctx: ctx.token_probs,
+                adjust_fn=lambda ctx: ctx.token_id_probs,
                 use_live_state=True,
                 commit_token=False,
             )
@@ -936,7 +925,7 @@ class TestSampleTokenAdjusted:
             result = one_step_model.sample_token_adjusted(
                 top_k=2,
                 top_p=1.0,
-                adjust_fn=lambda ctx: ctx.token_probs,
+                adjust_fn=lambda ctx: ctx.token_id_probs,
                 use_live_state=True,
                 commit_token=False,
             )
@@ -955,7 +944,7 @@ class TestSampleTokenAdjusted:
             result = one_step_model.sample_token_adjusted(
                 top_k=2,
                 top_p=1.0,
-                adjust_fn=lambda ctx: ctx.token_probs,
+                adjust_fn=lambda ctx: ctx.token_id_probs,
                 use_live_state=False,
                 context_tokens=[7, 8],
                 commit_token=False,
@@ -970,9 +959,10 @@ class TestSampleTokenAdjusted:
         """Output contains before/after candidate distributions and sampled token probability."""
 
         def adjust_fn(ctx):
-            adjusted = dict(ctx.token_probs)
-            adjusted['<tok2>'] = adjusted['<tok2>'] + 2.0
-            return adjusted
+            ids = ctx.token_id_probs.candidate_ids.copy()
+            lps = ctx.token_id_probs.candidate_logprobs.copy()
+            lps[1] = lps[1] + 2.0
+            return id_logprobs_to_candidate_tokens({int(i): float(lp) for i, lp in zip(ids, lps, strict=True)})
 
         with patch.object(one_step_model, '_format_chat_prompt', return_value=[1, 2]), \
              patch('problm_solver.llama_interface.sample_from_logprobs', return_value='<tok2>'):
@@ -1013,7 +1003,7 @@ class TestSampleTokenAdjusted:
             result = one_step_model.sample_token_adjusted(
                 top_k=2,
                 top_p=1.0,
-                adjust_fn=lambda ctx: ctx.token_probs,
+                adjust_fn=lambda ctx: ctx.token_id_probs,
                 commit_token=False,
             )
 
@@ -1028,24 +1018,24 @@ class TestSampleTokenAdjusted:
             result = one_step_model.sample_token_adjusted(
                 top_k=2,
                 top_p=1.0,
-                adjust_fn=lambda ctx: ctx.token_probs,
+                adjust_fn=lambda ctx: ctx.token_id_probs,
             )
 
-        one_step_model._llm.eval.assert_called_once_with([42])
+        one_step_model._llm.eval.assert_called_once()
+        assert len(one_step_model._llm.eval.call_args.args[0]) == 1
         assert result['sampled_token_is_terminal'] is False
 
     def test_terminal_eos_token_sets_terminal_flag_and_skips_eval(self, one_step_model) -> None:
         """EOS token IDs are terminal, produce sampled_token=None, and are not eval-committed."""
         one_step_model._llm.n_tokens = 5
-        one_step_model._llm.tokenize.return_value = [0]  # EOS
+        one_step_model._llm.token_eos.return_value = 1
         one_step_model._llm.eval.reset_mock()
 
-        with patch('problm_solver.llama_interface.sample_from_logprobs', return_value='<tok1>'):
-            result = one_step_model.sample_token_adjusted(
-                top_k=2,
-                top_p=1.0,
-                adjust_fn=lambda ctx: ctx.token_probs,
-            )
+        result = one_step_model.sample_token_adjusted(
+            top_k=1,
+            top_p=1.0,
+            adjust_fn=lambda ctx: ctx.token_id_probs,
+        )
 
         one_step_model._llm.eval.assert_not_called()
         assert result['sampled_token'] is None

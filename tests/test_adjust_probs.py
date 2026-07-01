@@ -14,6 +14,7 @@ from problm_solver.adjust_probs import (
     SampleLowTemp,
     SamplePowerDist,
     adjust_identity,
+    id_logprobs_to_candidate_tokens,
 )
 
 
@@ -25,12 +26,11 @@ from problm_solver.adjust_probs import (
 def basic_context() -> GenerationContext:
     """Return a minimal GenerationContext for testing simple adjust functions."""
     return GenerationContext(
-        token_probs={' hello': -0.5, ' world': -1.2},
+        token_id_probs=id_logprobs_to_candidate_tokens({11: -0.5, 22: -1.2}),
         prev_probs=[],
         context_tokens=[1, 2, 3],
-        query_next=MagicMock(return_value={' a': -0.5, ' b': -1.0}),
+        query_next_id=MagicMock(return_value=id_logprobs_to_candidate_tokens({7: -0.5, 8: -1.0})),
         query_branch=MagicMock(return_value=-1.5),
-        tokenize_token=MagicMock(return_value=[99]),
     )
 
 
@@ -43,18 +43,13 @@ def context_with_prev(basic_context: GenerationContext) -> GenerationContext:
 
 @pytest.fixture()
 def power_dist_context() -> GenerationContext:
-    """Return a GenerationContext suitable for SamplePowerDist tests.
-
-    Two candidate tokens, query_branch always returns a fixed log-prob,
-    tokenize_token always returns [99].
-    """
+    """Return a GenerationContext suitable for SamplePowerDist tests."""
     return GenerationContext(
-        token_probs={' hello': -0.5, ' world': -1.2},
+        token_id_probs=id_logprobs_to_candidate_tokens({11: -0.5, 22: -1.2}),
         prev_probs=[],
         context_tokens=[1, 2, 3],
-        query_next=MagicMock(return_value={' a': -0.5, ' b': -1.0}),
+        query_next_id=MagicMock(return_value=id_logprobs_to_candidate_tokens({7: -0.5, 8: -1.0})),
         query_branch=MagicMock(return_value=-1.5),
-        tokenize_token=MagicMock(return_value=[99]),
     )
 
 
@@ -65,9 +60,9 @@ def power_dist_context() -> GenerationContext:
 class TestGenerationContext:
     """Tests for GenerationContext dataclass."""
 
-    def test_stores_token_probs(self, basic_context: GenerationContext) -> None:
-        """token_probs is stored correctly."""
-        assert basic_context.token_probs == {' hello': -0.5, ' world': -1.2}
+    def test_stores_token_id_probs(self, basic_context: GenerationContext) -> None:
+        """token_id_probs is stored correctly."""
+        assert basic_context.token_id_probs.candidate_ids.tolist() == [11, 22]
 
     def test_stores_prev_probs(self, basic_context: GenerationContext) -> None:
         """prev_probs is stored correctly."""
@@ -77,17 +72,17 @@ class TestGenerationContext:
         """context_tokens is stored correctly."""
         assert basic_context.context_tokens == [1, 2, 3]
 
-    def test_query_next_is_callable(self, basic_context: GenerationContext) -> None:
-        """query_next field is callable."""
-        assert callable(basic_context.query_next)
+    def test_query_next_id_is_callable(self, basic_context: GenerationContext) -> None:
+        """query_next_id field is callable."""
+        assert callable(basic_context.query_next_id)
 
     def test_query_branch_is_callable(self, basic_context: GenerationContext) -> None:
         """query_branch field is callable."""
         assert callable(basic_context.query_branch)
 
-    def test_tokenize_token_is_callable(self, basic_context: GenerationContext) -> None:
-        """tokenize_token field is callable."""
-        assert callable(basic_context.tokenize_token)
+    def test_token_id_candidates_are_present(self, basic_context: GenerationContext) -> None:
+        """Candidate IDs/logprobs are present."""
+        assert len(basic_context.token_id_probs.candidate_ids) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -97,13 +92,15 @@ class TestGenerationContext:
 class TestAdjustIdentity:
     """Tests for adjust_identity."""
 
-    def test_returns_dict(self, basic_context: GenerationContext) -> None:
-        """adjust_identity() returns a dict."""
-        assert isinstance(adjust_identity(basic_context), dict)
+    def test_returns_candidate_tokens(self, basic_context: GenerationContext) -> None:
+        """adjust_identity() returns CandidateTokens."""
+        out = adjust_identity(basic_context)
+        assert out.candidate_ids.tolist() == basic_context.token_id_probs.candidate_ids.tolist()
 
     def test_returns_token_probs_unchanged(self, basic_context: GenerationContext) -> None:
-        """adjust_identity() returns context.token_probs unmodified."""
-        assert adjust_identity(basic_context) == basic_context.token_probs
+        """adjust_identity() returns context.token_id_probs unmodified."""
+        out = adjust_identity(basic_context)
+        assert out.candidate_logprobs.tolist() == basic_context.token_id_probs.candidate_logprobs.tolist()
 
     def test_ignores_prev_probs(
         self,
@@ -116,7 +113,8 @@ class TestAdjustIdentity:
     def test_satisfies_adjust_fn_signature(self, basic_context: GenerationContext) -> None:
         """adjust_identity is a valid AdjustFn (callable with correct signature)."""
         assert callable(adjust_identity)
-        assert isinstance(adjust_identity(basic_context), dict)
+        out = adjust_identity(basic_context)
+        assert out.candidate_ids.dtype == np.int32
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +140,7 @@ class TestSampleLowTempInit:
 
     def test_satisfies_adjust_fn_signature(self, basic_context: GenerationContext) -> None:
         """SampleLowTemp instances satisfy the AdjustFn interface."""
-        assert isinstance(SampleLowTemp(alpha=2)(basic_context), dict)
+        assert isinstance(SampleLowTemp(alpha=2)(basic_context).candidate_ids, np.ndarray)
 
 
 # ---------------------------------------------------------------------------
@@ -157,27 +155,27 @@ class TestSampleLowTempCall:
         """Return a SampleLowTemp instance with alpha=2."""
         return SampleLowTemp(alpha=2)
 
-    def test_returns_dict(self, adj: SampleLowTemp, basic_context: GenerationContext) -> None:
-        """__call__() returns a dict."""
-        assert isinstance(adj(basic_context), dict)
+    def test_returns_candidate_tokens(self, adj: SampleLowTemp, basic_context: GenerationContext) -> None:
+        """__call__() returns CandidateTokens."""
+        assert len(adj(basic_context).candidate_ids) == 2
 
-    def test_output_keys_match_input_keys(
+    def test_output_ids_match_input_ids(
         self, adj: SampleLowTemp, basic_context: GenerationContext
     ) -> None:
-        """The returned dict has the same keys as context.token_probs."""
-        assert set(adj(basic_context).keys()) == set(basic_context.token_probs.keys())
+        """The returned candidates have the same token IDs as input."""
+        assert adj(basic_context).candidate_ids.tolist() == basic_context.token_id_probs.candidate_ids.tolist()
 
     def test_output_values_are_floats(
         self, adj: SampleLowTemp, basic_context: GenerationContext
     ) -> None:
-        """All values in the returned dict are floats."""
-        assert all(isinstance(v, float) for v in adj(basic_context).values())
+        """All values in the returned distribution are floats."""
+        assert adj(basic_context).candidate_logprobs.dtype == np.float64
 
     def test_empty_prev_probs_gives_finite_output(
         self, adj: SampleLowTemp, basic_context: GenerationContext
     ) -> None:
         """With no previous tokens, output log-probs are finite for non-zero probs."""
-        assert all(np.isfinite(v) for v in adj(basic_context).values())
+        assert np.all(np.isfinite(adj(basic_context).candidate_logprobs))
 
     def test_with_prev_probs_changes_output(
         self,
@@ -186,74 +184,74 @@ class TestSampleLowTempCall:
         context_with_prev: GenerationContext,
     ) -> None:
         """Providing non-empty prev_probs produces a different result."""
-        assert adj(basic_context) != adj(context_with_prev)
+        out_a = adj(basic_context)
+        out_b = adj(context_with_prev)
+        assert not np.allclose(out_a.candidate_logprobs, out_b.candidate_logprobs)
 
     def test_relative_order_preserved_with_empty_prev_probs(
         self, adj: SampleLowTemp
     ) -> None:
         """With no previous tokens, the most likely token remains most likely."""
         ctx = GenerationContext(
-            token_probs={' likely': -0.1, ' unlikely': -5.0},
+            token_id_probs=id_logprobs_to_candidate_tokens({1: -0.1, 2: -5.0}),
             prev_probs=[],
             context_tokens=[],
-            query_next=MagicMock(),
+            query_next_id=MagicMock(),
             query_branch=MagicMock(),
-            tokenize_token=MagicMock(),
         )
         result = adj(ctx)
-        assert result[' likely'] > result[' unlikely']
+        assert result.candidate_logprobs[0] > result.candidate_logprobs[1]
 
     def test_alpha_one_preserves_relative_order(self) -> None:
         """With alpha=1 and no prev_probs, relative token ordering is unchanged."""
         ctx = GenerationContext(
-            token_probs={' a': -0.2, ' b': -0.8, ' c': -2.0},
+            token_id_probs=id_logprobs_to_candidate_tokens({1: -0.2, 2: -0.8, 3: -2.0}),
             prev_probs=[],
             context_tokens=[],
-            query_next=MagicMock(),
+            query_next_id=MagicMock(),
             query_branch=MagicMock(),
-            tokenize_token=MagicMock(),
         )
         result = SampleLowTemp(alpha=1)(ctx)
-        assert result[' a'] > result[' b'] > result[' c']
+        lp = result.candidate_logprobs
+        assert lp[0] > lp[1] > lp[2]
 
     def test_different_alpha_produces_different_output(self) -> None:
         """Different alpha values produce different adjusted distributions."""
         ctx = GenerationContext(
-            token_probs={' a': -0.2, ' b': -1.0},
+            token_id_probs=id_logprobs_to_candidate_tokens({1: -0.2, 2: -1.0}),
             prev_probs=[],
             context_tokens=[],
-            query_next=MagicMock(),
+            query_next_id=MagicMock(),
             query_branch=MagicMock(),
-            tokenize_token=MagicMock(),
         )
-        assert SampleLowTemp(alpha=1)(ctx) != SampleLowTemp(alpha=3)(ctx)
+        out1 = SampleLowTemp(alpha=1)(ctx)
+        out3 = SampleLowTemp(alpha=3)(ctx)
+        assert not np.allclose(out1.candidate_logprobs, out3.candidate_logprobs)
 
     def test_matches_exact_power_scaling_without_history(self) -> None:
         """With empty history, output equals log(exp(lp-lp_max) ** alpha)."""
         ctx = GenerationContext(
-            token_probs={' a': -0.2, ' b': -1.2},
+            token_id_probs=id_logprobs_to_candidate_tokens({1: -0.2, 2: -1.2}),
             prev_probs=[],
             context_tokens=[],
-            query_next=MagicMock(),
+            query_next_id=MagicMock(),
             query_branch=MagicMock(),
-            tokenize_token=MagicMock(),
         )
         out = SampleLowTemp(alpha=2.0)(ctx)
-        assert out == pytest.approx({' a': 0.0, ' b': -2.0})
+        assert out.candidate_logprobs.tolist() == pytest.approx([0.0, -2.0])
 
     def test_matches_exact_power_scaling_with_history_factor(self) -> None:
         """History contributes a constant log(prod(prev_probs ** alpha)) shift."""
         ctx = GenerationContext(
-            token_probs={' a': -0.2, ' b': -1.2},
+            token_id_probs=id_logprobs_to_candidate_tokens({1: -0.2, 2: -1.2}),
             prev_probs=[0.5],
             context_tokens=[],
-            query_next=MagicMock(),
+            query_next_id=MagicMock(),
             query_branch=MagicMock(),
-            tokenize_token=MagicMock(),
         )
         out = SampleLowTemp(alpha=2.0)(ctx)
         expected_shift = float(np.log(0.5 ** 2))
-        assert out == pytest.approx({' a': expected_shift, ' b': expected_shift - 2.0})
+        assert out.candidate_logprobs.tolist() == pytest.approx([expected_shift, expected_shift - 2.0])
 
 
 # ---------------------------------------------------------------------------
@@ -523,25 +521,25 @@ class TestSamplePowerDistCall:
             alpha=1.0, lookahead_depth=2, branch_sampler=mock_sampler
         )
 
-    def test_returns_dict(
+    def test_returns_candidate_tokens(
         self, spd: SamplePowerDist, power_dist_context: GenerationContext
     ) -> None:
-        """__call__() returns a dict."""
-        assert isinstance(spd(power_dist_context), dict)
+        """__call__() returns CandidateTokens-like payload."""
+        assert len(spd(power_dist_context).candidate_ids) == 2
 
-    def test_output_keys_match_input_keys(
+    def test_output_ids_match_input_ids(
         self, spd: SamplePowerDist, power_dist_context: GenerationContext
     ) -> None:
-        """The returned dict has the same keys as context.token_probs."""
+        """The returned IDs match input candidate IDs."""
         result = spd(power_dist_context)
-        assert set(result.keys()) == set(power_dist_context.token_probs.keys())
+        assert result.candidate_ids.tolist() == power_dist_context.token_id_probs.candidate_ids.tolist()
 
     def test_output_values_are_floats(
         self, spd: SamplePowerDist, power_dist_context: GenerationContext
     ) -> None:
-        """All values in the returned dict are floats."""
+        """All values in the returned distribution are floats."""
         result = spd(power_dist_context)
-        assert all(isinstance(v, float) for v in result.values())
+        assert result.candidate_logprobs.dtype == np.float64
 
     def test_query_branch_called_for_each_candidate_token(
         self, spd: SamplePowerDist, power_dist_context: GenerationContext
@@ -596,12 +594,11 @@ class TestSamplePowerDistCall:
         mock_sampler.step.side_effect = lambda proposed_log_prob, **_: proposed_log_prob
         spd = SamplePowerDist(alpha=1.0, lookahead_depth=5, branch_sampler=mock_sampler)
         ctx = GenerationContext(
-            token_probs={' hello': -0.5},
+            token_id_probs=id_logprobs_to_candidate_tokens({99: -0.5}),
             prev_probs=[],
             context_tokens=[1, 2],
-            query_next=MagicMock(),
+            query_next_id=MagicMock(),
             query_branch=MagicMock(return_value=-2.5),
-            tokenize_token=MagicMock(return_value=[99]),
         )
         spd(ctx)
         mock_sampler.step.assert_called_once_with(
@@ -614,12 +611,11 @@ class TestSamplePowerDistCall:
         """query_branch is called with lookahead_depth as its depth argument."""
         spd = SamplePowerDist(alpha=1.0, lookahead_depth=4, branch_sampler=mock_sampler)
         ctx = GenerationContext(
-            token_probs={' hello': -0.5},
+            token_id_probs=id_logprobs_to_candidate_tokens({99: -0.5}),
             prev_probs=[],
             context_tokens=[1],
-            query_next=MagicMock(),
+            query_next_id=MagicMock(),
             query_branch=MagicMock(return_value=-1.0),
-            tokenize_token=MagicMock(return_value=[99]),
         )
         spd(ctx)
         args, _ = ctx.query_branch.call_args
@@ -645,12 +641,11 @@ class TestSamplePowerDistCall:
             return -1.0
 
         ctx = GenerationContext(
-            token_probs={' hello': -0.5, ' world': -1.2},
+            token_id_probs=id_logprobs_to_candidate_tokens({99: -0.5, 100: -1.2}),
             prev_probs=[],
             context_tokens=[1],
-            query_next=MagicMock(),
+            query_next_id=MagicMock(),
             query_branch=MagicMock(side_effect=guarded_query_branch),
-            tokenize_token=MagicMock(return_value=[99]),
         )
 
         spd = SamplePowerDist(alpha=1.0, lookahead_depth=2, branch_sampler=mock_sampler)
@@ -676,12 +671,11 @@ class TestSamplePowerDistCall:
         query_next_ids_mock = MagicMock(return_value=[(3, -0.1), (4, -0.3)])
         query_branch = MagicMock(return_value=-10.0)
         ctx = GenerationContext(
-            token_probs={' hello': -0.5, ' world': -1.2},
+            token_id_probs=id_logprobs_to_candidate_tokens({99: -0.5, 100: -1.2}),
             prev_probs=[],
             context_tokens=[1, 2],
-            query_next=MagicMock(),
+            query_next_id=MagicMock(),
             query_branch=query_branch,
-            tokenize_token=MagicMock(return_value=[99]),
             base_live_state=(1, 2),
             query_next_ids_from_live=query_next_ids_mock,
             save_live_state=save_state,
@@ -693,8 +687,8 @@ class TestSamplePowerDistCall:
 
         assert query_next_ids_mock.call_count > 0
         assert query_branch.call_count == 0
-        assert set(result.keys()) == {' hello', ' world'}
-        assert all(isinstance(v, float) for v in result.values())
+        assert set(result.candidate_ids.tolist()) == {99, 100}
+        assert result.candidate_logprobs.dtype == np.float64
 
 
 # ---------------------------------------------------------------------------
@@ -709,14 +703,15 @@ class TestAdjustFnTypeAlias:
     ) -> None:
         """adjust_identity satisfies the AdjustFn calling convention."""
         fn: AdjustFn = adjust_identity
-        assert fn(basic_context) == basic_context.token_probs
+        out = fn(basic_context)
+        assert out.candidate_ids.tolist() == basic_context.token_id_probs.candidate_ids.tolist()
 
     def test_sample_low_temp_is_valid_adjust_fn(
         self, basic_context: GenerationContext
     ) -> None:
         """A SampleLowTemp instance satisfies the AdjustFn calling convention."""
         fn: AdjustFn = SampleLowTemp(alpha=2)
-        assert isinstance(fn(basic_context), dict)
+        assert len(fn(basic_context).candidate_ids) > 0
 
     def test_sample_power_dist_is_valid_adjust_fn(
         self, basic_context: GenerationContext
@@ -726,4 +721,4 @@ class TestAdjustFnTypeAlias:
             alpha=1.0, lookahead_depth=1,
             branch_sampler=MetropolisSampler(),
         )
-        assert isinstance(fn(basic_context), dict)
+        assert len(fn(basic_context).candidate_ids) > 0
