@@ -90,11 +90,6 @@ def adjust_identity(context: GenerationContext) -> CandidateTokens:
     return context.token_id_probs
 
 
-def adjust_identity_ids(context: GenerationContext) -> CandidateTokens:
-    """Alias for :func:`adjust_identity`."""
-    return adjust_identity(context)
-
-
 class SampleLowTemp:
     """Adjust token log-probabilities by power-scaling with selection history.
 
