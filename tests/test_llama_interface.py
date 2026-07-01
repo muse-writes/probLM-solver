@@ -964,8 +964,11 @@ class TestSampleTokenAdjusted:
             lps[1] = lps[1] + 2.0
             return id_logprobs_to_candidate_tokens({int(i): float(lp) for i, lp in zip(ids, lps, strict=True)})
 
+        mock_rng = MagicMock()
+        mock_rng.choice.return_value = 1
+
         with patch.object(one_step_model, '_format_chat_prompt', return_value=[1, 2]), \
-             patch('problm_solver.llama_interface.sample_from_logprobs', return_value='<tok2>'):
+             patch('problm_solver.llama_interface.resolve_rng', return_value=mock_rng):
             result = one_step_model.sample_token_adjusted(
                 top_k=2,
                 top_p=1.0,

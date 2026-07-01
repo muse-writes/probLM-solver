@@ -36,6 +36,9 @@ class GenerationContext:
     :param query_branch: Generates a complete branch of up to ``depth`` tokens
         from the given context in a single model call and returns the sum of
         per-token log-probabilities. Returns ``0.0`` on immediate EOS.
+    :param query_branch_from_live: Generates a complete branch of up to
+        ``depth`` tokens from the model's currently loaded live state and
+        returns the sum of per-token log-probabilities. Optional.
     """
 
     token_id_probs: CandidateTokens
@@ -43,6 +46,7 @@ class GenerationContext:
     context_tokens: list[int]
     query_next_id: Callable[[list[int]], CandidateTokens]
     query_branch: Callable[[list[int], int], float]
+    query_branch_from_live: Callable[[int], float] | None = None
     base_live_state: Any | None = None
     query_next_ids_from_live: Callable[[int], list[tuple[int, float]]] | None = None
     save_live_state: Callable[[], Any] | None = None
@@ -471,28 +475,71 @@ class SamplePowerDist:
                     eval_tokens=eval_tokens,
                 )
         else:
-            def score_future(branch_ctx: list[int]) -> np.float64:
-                branch_log_probs_list: list[float] = []
-                self.branch_sampler.reset()
+            has_live_branch = (
+                context.query_branch_from_live is not None
+                and context.base_live_state is not None
+                and context.save_live_state is not None
+                and context.load_live_state is not None
+                and context.eval_tokens is not None
+            )
 
-                while True:
-                    proposed_branch_log_prob = context.query_branch(
-                        branch_ctx, self.lookahead_depth
-                    )
+            if has_live_branch:
+                base_live_state = context.base_live_state
+                query_branch_from_live = context.query_branch_from_live
+                save_live_state = context.save_live_state
+                load_live_state = context.load_live_state
+                eval_tokens = context.eval_tokens
 
-                    accepted_log_prob = self.branch_sampler.step(
-                        proposed_log_prob=proposed_branch_log_prob,
-                        alpha=self.alpha,
-                    )
-                    branch_log_probs_list.append(accepted_log_prob)
+                def score_future_from_candidate_id(candidate_id: int) -> np.float64:
+                    load_live_state(base_live_state)
+                    eval_tokens([candidate_id])
+                    candidate_root_state = save_live_state()
 
-                    if not self.branch_sampler.should_continue(
-                        np.array(branch_log_probs_list, dtype=np.float64)
-                    ):
-                        break
+                    branch_log_probs_list: list[float] = []
+                    self.branch_sampler.reset()
 
-                branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
-                return self.branch_sampler.future_logprob(self.alpha, branch_log_probs)
+                    while True:
+                        load_live_state(candidate_root_state)
+                        proposed_branch_log_prob = query_branch_from_live(self.lookahead_depth)
+
+                        accepted_log_prob = self.branch_sampler.step(
+                            proposed_log_prob=proposed_branch_log_prob,
+                            alpha=self.alpha,
+                        )
+                        branch_log_probs_list.append(accepted_log_prob)
+
+                        if not self.branch_sampler.should_continue(
+                            np.array(branch_log_probs_list, dtype=np.float64)
+                        ):
+                            break
+
+                    branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
+                    return self.branch_sampler.future_logprob(self.alpha, branch_log_probs)
+            else:
+                def score_future_from_candidate_id(candidate_id: int) -> np.float64:
+                    branch_ctx = list(context.context_tokens) + [candidate_id]
+                    branch_log_probs_list: list[float] = []
+                    self.branch_sampler.reset()
+
+                    while True:
+                        proposed_branch_log_prob = context.query_branch(
+                            branch_ctx,
+                            self.lookahead_depth,
+                        )
+
+                        accepted_log_prob = self.branch_sampler.step(
+                            proposed_log_prob=proposed_branch_log_prob,
+                            alpha=self.alpha,
+                        )
+                        branch_log_probs_list.append(accepted_log_prob)
+
+                        if not self.branch_sampler.should_continue(
+                            np.array(branch_log_probs_list, dtype=np.float64)
+                        ):
+                            break
+
+                    branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
+                    return self.branch_sampler.future_logprob(self.alpha, branch_log_probs)
 
         candidate_ids = context.token_id_probs.candidate_ids
         candidate_logprobs = context.token_id_probs.candidate_logprobs
@@ -509,8 +556,7 @@ class SamplePowerDist:
             if self.branch_sampler.supports_token_beam:
                 future_lp = score_future([tid])
             else:
-                branch_ctx = list(context.context_tokens) + [tid]
-                future_lp = score_future(branch_ctx)
+                future_lp = score_future_from_candidate_id(tid)
             result[tid] = self.alpha * float(log_prob) + float(future_lp)
 
         return id_logprobs_to_candidate_tokens(result)

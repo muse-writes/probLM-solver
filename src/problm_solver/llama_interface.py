@@ -289,6 +289,37 @@ class ModelInstance:
         return total_log_prob
 
 
+    def query_branch_from_live(self, max_tokens: int, rng: RNGLike = None) -> float:
+        """Generate a branch from the currently loaded live state.
+
+        Unlike :meth:`query_branch`, this method does not call ``reset()`` and
+        does not evaluate any prefix/context tokens. It assumes the live model
+        state is already positioned at the branch root.
+
+        :param max_tokens: Maximum number of tokens to generate in the branch.
+        :returns: Sum of per-token log-probabilities for all generated tokens,
+            or ``0.0`` if EOS is sampled on the first step.
+        """
+        eos_id = self._llm.token_eos()
+        total_log_prob = 0.0
+        method_rng = resolve_rng(
+            self._rng if rng is None else rng,
+            stream='llama.query_branch_from_live',
+        )
+
+        for _ in range(max_tokens):
+            logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+            next_id = int(np.argmax(logprobs + method_rng.gumbel(size=len(logprobs))))
+
+            if next_id == eos_id:
+                break
+
+            total_log_prob += float(logprobs[next_id])
+            self._llm.eval([next_id])
+
+        return total_log_prob
+
+
 ## -- Miscellaneous -- ##
 
 ### -- Expose lower level Llama API -- ###
@@ -532,6 +563,10 @@ class ModelInstance:
                         depth,
                         rng=method_rng,
                     ),
+                    query_branch_from_live=lambda depth: self.query_branch_from_live(
+                        depth,
+                        rng=method_rng,
+                    ),
                     base_live_state=pre_adjust_state,
                     query_next_ids_from_live=lambda n: self._top_k_ids_from_logprobs(
                         self._log_softmax(self._llm.scores[self._llm.n_tokens - 1]),
@@ -681,6 +716,10 @@ class ModelInstance:
                 ),
                 query_branch=lambda ctx_ids, depth: self.query_branch(
                     ctx_ids,
+                    depth,
+                    rng=method_rng,
+                ),
+                query_branch_from_live=lambda depth: self.query_branch_from_live(
                     depth,
                     rng=method_rng,
                 ),
