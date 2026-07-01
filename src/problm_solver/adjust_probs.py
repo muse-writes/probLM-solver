@@ -120,16 +120,42 @@ class SampleLowTemp:
             probabilities when computing the adjustment.
         """
         self.alpha = alpha
+        self._prev_len = 0
+        self._prev_logprob_sum = 0.0
+
+    def reset(self) -> None:
+        """Reset rolling history state for a new generation."""
+        self._prev_len = 0
+        self._prev_logprob_sum = 0.0
+
+    def _history_log_shift(self, prev_probs: list[float]) -> float:
+        """Return rolling ``alpha * sum(log(prev_probs))`` for history scaling."""
+        cur_len = len(prev_probs)
+        if cur_len == 0:
+            self.reset()
+            return 0.0
+
+        if cur_len < self._prev_len:
+            self._prev_logprob_sum = float(np.sum(np.log(np.array(prev_probs, dtype=float))))
+        elif cur_len == self._prev_len + 1:
+            self._prev_logprob_sum += float(np.log(prev_probs[-1]))
+        elif cur_len == self._prev_len:
+            self._prev_logprob_sum = float(np.sum(np.log(np.array(prev_probs, dtype=float))))
+        else:
+            self._prev_logprob_sum = float(np.sum(np.log(np.array(prev_probs, dtype=float))))
+
+        self._prev_len = cur_len
+        return self.alpha * self._prev_logprob_sum
 
     def __call__(self, context: GenerationContext) -> CandidateTokens:
         """Apply power-scaling adjustment to the current token-ID distribution."""
         candidate_ids = context.token_id_probs.candidate_ids
         lp = context.token_id_probs.candidate_logprobs.astype(np.float64, copy=True)
         lp -= lp.max()
-        p: npt.NDArray[np.float64] = np.exp(lp)
+
         prev_probs = context.prev_probs if context.prev_probs is not None else []
-        prev_alpha = float(np.prod(np.array(prev_probs, dtype=float) ** self.alpha))
-        new_logprobs: npt.NDArray[np.float64] = np.log(p ** self.alpha * prev_alpha)
+        history_log_shift = self._history_log_shift(prev_probs)
+        new_logprobs: npt.NDArray[np.float64] = self.alpha * lp + history_log_shift
         return CandidateTokens(
             candidate_ids=candidate_ids.astype(np.int32, copy=False),
             candidate_logprobs=new_logprobs,

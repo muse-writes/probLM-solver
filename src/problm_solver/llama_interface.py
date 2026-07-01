@@ -537,6 +537,8 @@ class ModelInstance:
             self._rng if rng is None else rng,
             stream='llama.generate_adjusted',
         )
+        if hasattr(adjust_fn, 'reset') and callable(adjust_fn.reset):
+            adjust_fn.reset()
         for step in tqdm(range(max_tokens), desc='generate_adjusted', unit='tok'):
 
 # Determine logprobs and sample intersection of top-k and top-p.
@@ -695,6 +697,8 @@ class ModelInstance:
         logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
         candidates = candidate_generator(logprobs)
 
+        prev_prob_values = list(prev_probs) if prev_probs is not None else []
+
         if len(candidates.candidate_ids) == 1:
             adjusted_candidates = candidates
             sampled_id = int(candidates.candidate_ids[0])
@@ -704,7 +708,7 @@ class ModelInstance:
             pre_adjust_state = self.save_live_state()
             ctx = GenerationContext(
                 token_id_probs=candidates,
-                prev_probs=list(prev_probs) if prev_probs is not None else [],
+                prev_probs=prev_prob_values,
                 context_tokens=(
                     list(effective_context_tokens)
                     if effective_context_tokens is not None

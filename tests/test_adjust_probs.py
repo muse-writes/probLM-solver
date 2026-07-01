@@ -253,6 +253,25 @@ class TestSampleLowTempCall:
         expected_shift = float(np.log(0.5 ** 2))
         assert out.candidate_logprobs.tolist() == pytest.approx([expected_shift, expected_shift - 2.0])
 
+    def test_stateful_rolling_matches_full_recompute(self) -> None:
+        """Stateful rolling history matches fresh full recomputation across steps."""
+        shared_kwargs = {
+            'token_id_probs': id_logprobs_to_candidate_tokens({1: -0.2, 2: -1.2}),
+            'context_tokens': [],
+            'query_next_id': MagicMock(),
+            'query_branch': MagicMock(),
+        }
+
+        rolling_adj = SampleLowTemp(alpha=2.0)
+        for prev_probs in ([], [0.5], [0.5, 0.25]):
+            rolling_out = rolling_adj(GenerationContext(prev_probs=prev_probs, **shared_kwargs))
+            fresh_out = SampleLowTemp(alpha=2.0)(
+                GenerationContext(prev_probs=prev_probs, **shared_kwargs)
+            )
+            assert rolling_out.candidate_logprobs.tolist() == pytest.approx(
+                fresh_out.candidate_logprobs.tolist()
+            )
+
 
 # ---------------------------------------------------------------------------
 # TestBranchSampler
