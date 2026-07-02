@@ -70,6 +70,28 @@ class TestModelInstanceInit:
             # 4 states × (2048 ctx × 2 K&V × 32 layers × 8 KV heads × 128 head_dim × 2 bytes)
             assert kwargs.get('capacity_bytes') == 4 * 2048 * 2 * 32 * 8 * 128 * 2
 
+    def test_use_c_api_true_selects_c_backend(self) -> None:
+        """use_c_api=True wires ModelCBackend into ModelInstance."""
+        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_lowlevel import ModelCBackend
+
+        with patch('problm_solver.llama_interface.Llama') as mock_llama:
+            mock_llama.return_value = _make_llama_mock()
+            instance = ModelInstance(fname='fake.gguf', context='Hello', use_c_api=True)
+
+        assert isinstance(instance._llm_backend, ModelCBackend)
+
+    def test_use_c_api_false_selects_llama_backend(self) -> None:
+        """use_c_api=False wires ModelLlamaBackend into ModelInstance."""
+        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_lowlevel import ModelLlamaBackend
+
+        with patch('problm_solver.llama_interface.Llama') as mock_llama:
+            mock_llama.return_value = _make_llama_mock()
+            instance = ModelInstance(fname='fake.gguf', context='Hello', use_c_api=False)
+
+        assert isinstance(instance._llm_backend, ModelLlamaBackend)
+
 
 class TestModelInstanceQuery:
     """Tests for ModelInstance.query."""

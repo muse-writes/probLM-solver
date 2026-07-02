@@ -2,8 +2,9 @@
 
 import copy
 import logging
+from collections.abc import Callable
 from inspect import isclass
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -21,6 +22,7 @@ from problm_solver.data import (
     LLMOutputDataFull,
     LLMTokenData,
 )
+from problm_solver.llama_lowlevel import ModelBackendGeneric, ModelCBackend, ModelLlamaBackend
 from problm_solver.random import RNGLike, resolve_rng
 
 # -- Module-wide setup -- #
@@ -43,6 +45,7 @@ class ModelInstance:
         n_ctx: int = 4096,
         logits_all: bool = False, # noqa: FBT001 FBT002
         n_gpu_layers: int = 0,
+        use_c_api: bool = True, # noqa: FBT001 FBT002
         *,
         rng: RNGLike = None,
     ) -> None:
@@ -80,14 +83,19 @@ class ModelInstance:
         )
         self._logits_all = logits_all
         _logger.info('Model %r loaded.', fname)
+        self._llm_backend: ModelBackendGeneric
+        if use_c_api:
+            self._llm_backend = ModelCBackend(self._llm)
+        else:
+            self._llm_backend = ModelLlamaBackend(self._llm)
 
 # Calculate number of bytes needed in Llama cache.
-        arch = self._llm.metadata['general.architecture']
-        n_layers = int(self._llm.metadata[f'{arch}.block_count'])
-        n_kv_heads = int(self._llm.metadata[f'{arch}.attention.head_count_kv'])
-        n_heads = int(self._llm.metadata[f'{arch}.attention.head_count'])
-        head_dim = int(self._llm.metadata[f'{arch}.embedding_length']) // n_heads
-        bytes_per_state = self._llm.n_ctx() * 2 * n_layers * n_kv_heads * head_dim * 2
+        arch = self._llm_backend.metadata()['general.architecture']
+        n_layers = int(self._llm_backend.metadata()[f'{arch}.block_count'])
+        n_kv_heads = int(self._llm_backend.metadata()[f'{arch}.attention.head_count_kv'])
+        n_heads = int(self._llm_backend.metadata()[f'{arch}.attention.head_count'])
+        head_dim = int(self._llm_backend.metadata()[f'{arch}.embedding_length']) // n_heads
+        bytes_per_state = self._llm_backend.n_ctx() * 2 * n_layers * n_kv_heads * head_dim * 2
 
 # Initialise and set cache and context.
         self._cache = LlamaRAMCache(capacity_bytes=4 * bytes_per_state)
@@ -97,6 +105,8 @@ class ModelInstance:
 
 # Set up RNG handling.
         self._rng = resolve_rng(rng, stream='global')
+
+# Vocabulary pruning stuff (important for computationally intensive probability adjustments).
         self._candidate_factory = CandidateGeneratorFactory()
 
 
@@ -121,8 +131,8 @@ class ModelInstance:
         :returns: the response string.
         """
         prompt_tokens = self._format_chat_prompt()
-        self._llm.reset()
-        self._llm.eval(prompt_tokens)
+        self._llm_backend.reset()
+        self._llm_backend.decode(prompt_tokens)
         tokens = []
         method_rng = resolve_rng(
             self._rng if rng is None else rng,
@@ -134,7 +144,7 @@ class ModelInstance:
             if next_id == self._llm.token_eos():
                 break
             tokens.append(next_id)
-            self._llm.eval([next_id])
+            self._llm_backend.decode([next_id])
         return self._llm.detokenize(tokens).decode('utf-8')
 
 
@@ -162,11 +172,11 @@ class ModelInstance:
         """
         max_tokens = 512  # TODO(Clio): Remove hard-coded maximum here.
         prompt_tokens = self._format_chat_prompt()
-        self._llm.reset()
-        self._llm.eval(prompt_tokens)
-        tokens: TokenSequence = []
+        self._llm_backend.reset()
+        self._llm_backend.decode(prompt_tokens)
+        tokens: list[str] = []
         probs: list[float] = []
-        eos_id = self._llm.token_eos()
+        eos_id = self._llm_backend.token_eos()
         method_rng = resolve_rng(
             self._rng if rng is None else rng,
             stream='llama.query_log_probs',
@@ -253,8 +263,8 @@ class ModelInstance:
         :returns: Sum of per-token log-probabilities for all generated tokens,
             or ``0.0`` if EOS is sampled on the first step.
         """
-        self._llm.reset()
-        self._llm.eval(context_tokens)
+        self._llm_backend.reset()
+        self._llm_backend.decode(context_tokens)
 
 # Snapshot the KV cache and logits immediately after evaluating the
 # context.  Restoring this state before generation ensures the branch
@@ -527,22 +537,23 @@ class ModelInstance:
         response_topk_dists: list[dict[str, float]] = []
 
 # LLM state setup.
-        eos_id = self._llm.token_eos()
+        eos_id = self._llm_backend.token_eos()
         context = self._format_chat_prompt()
-        self._llm.reset()
-        self._llm.eval(context)
+        self._llm_backend.reset()
+        self._llm_backend.decode(context)
 
 # Main generation loop.
         method_rng = resolve_rng(
             self._rng if rng is None else rng,
             stream='llama.generate_adjusted',
         )
-        if hasattr(adjust_fn, 'reset') and callable(adjust_fn.reset):
-            adjust_fn.reset()
+        reset_fn = getattr(adjust_fn, 'reset', None)
+        if callable(reset_fn):
+            cast(Callable[[], None], reset_fn)()
         for step in tqdm(range(max_tokens), desc='generate_adjusted', unit='tok'):
 
 # Determine logprobs and sample intersection of top-k and top-p.
-            logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+            logprobs = self._log_softmax(self._llm_backend.last_logits())
             candidates = candidate_generator(logprobs)
 
 # Skip adjustment and sampling if only one logprob.
@@ -571,12 +582,12 @@ class ModelInstance:
                     ),
                     base_live_state=pre_adjust_state,
                     query_next_ids_from_live=lambda n: self._top_k_ids_from_logprobs(
-                        self._log_softmax(self._llm.scores[self._llm.n_tokens - 1]),
+                        self._log_softmax(self._llm_backend.last_logits()),
                         n,
                     ),
                     save_live_state=self.save_live_state,
                     load_live_state=self.load_live_state,
-                    eval_tokens=self._llm.eval,
+                    eval_tokens=self._llm_backend.decode,
                 )
                 adjusted_raw = adjust_fn(ctx)
                 self.load_live_state(pre_adjust_state)
@@ -592,10 +603,10 @@ class ModelInstance:
 # Resolve sampled token IDs for EOS checks and optional commit.
             token_ids = [sampled_id]
 
-# Check for end, call eval() if continuing.
+# Check for end, call decode() if continuing.
             if not token_ids or eos_id in token_ids:
                 break
-            self._llm.eval(token_ids)
+            self._llm_backend.decode(token_ids)
 
 # Assign various data variables for safekeeping.
             token_str = self._tokens_as_strings([sampled_id])[0]
@@ -681,20 +692,20 @@ class ModelInstance:
 
         state_source: str
         effective_context_tokens: list[int] | None
-        if use_live_state and self._llm.n_tokens > 0:
+        if use_live_state and self._llm_backend.n_tokens > 0:
             state_source = 'live'
             effective_context_tokens = None
         else:
-            self._llm.reset()
+            self._llm_backend.reset()
             if context_tokens is None:
                 effective_context_tokens = self._format_chat_prompt()
                 state_source = 'prompt'
             else:
                 effective_context_tokens = list(context_tokens)
                 state_source = 'context_tokens'
-            self._llm.eval(effective_context_tokens)
+            self._llm_backend.decode(effective_context_tokens)
 
-        logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+        logprobs = self._log_softmax(self._llm_backend.last_logits())
         candidates = candidate_generator(logprobs)
 
         prev_prob_values = list(prev_probs) if prev_probs is not None else []
@@ -729,12 +740,12 @@ class ModelInstance:
                 ),
                 base_live_state=pre_adjust_state,
                 query_next_ids_from_live=lambda n: self._top_k_ids_from_logprobs(
-                    self._log_softmax(self._llm.scores[self._llm.n_tokens - 1]),
+                    self._log_softmax(self._llm_backend.last_logits()),
                     n,
                 ),
                 save_live_state=self.save_live_state,
                 load_live_state=self.load_live_state,
-                eval_tokens=self._llm.eval,
+                eval_tokens=self._llm_backend.decode,
             )
             adjusted_raw = adjust_fn(ctx)
             self.load_live_state(pre_adjust_state)
@@ -750,11 +761,11 @@ class ModelInstance:
             )
 
         token_ids = [sampled_id]
-        eos_id = self._llm.token_eos()
+        eos_id = self._llm_backend.token_eos()
         sampled_is_terminal = sampled_id == eos_id
 
         if commit_token and not sampled_is_terminal:
-            self._llm.eval(token_ids)
+            self._llm_backend.decode(token_ids)
 
         top_k_lp = self._candidate_tokens_to_logprob_map(candidates)
         adjusted = self._candidate_tokens_to_logprob_map(adjusted_candidates)
