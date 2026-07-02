@@ -198,9 +198,9 @@ class ModelInstance:
         n_tokens: int,
     ) -> CandidateTokens:
         """Return top-k next-token candidates in token-ID space."""
-        self._llm.reset()
-        self._llm.eval(context_tokens)
-        logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+        self._llm_backend.reset()
+        self._llm_backend.decode(context_tokens)
+        logprobs = self._log_softmax(self._llm_backend.last_logits())
         generator = self._candidate_factory.get_candidate_generator(top_k=n_tokens, top_p=1.0)
         return generator(logprobs)
 
@@ -273,7 +273,7 @@ class ModelInstance:
         pre_branch_state = self.save_live_state()
         self.load_live_state(pre_branch_state)
 
-        eos_id = self._llm.token_eos()
+        eos_id = self._llm_backend.token_eos()
         total_log_prob = 0.0
         method_rng = resolve_rng(
             self._rng if rng is None else rng,
@@ -283,7 +283,7 @@ class ModelInstance:
         for _ in range(max_tokens):
 # scores[n_tokens - 1] is the most recently decoded logit row,
 # valid for logits_all=True (filled by eval's n_past slice).
-            logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+            logprobs = self._log_softmax(self._llm_backend.last_logits())
 
 # Gumbel-max trick: argmax(log p + Gumbel(0,1)) is equivalent to
 # drawing from categorical(softmax(log p)) without materialising
@@ -294,7 +294,7 @@ class ModelInstance:
                 break
 
             total_log_prob += float(logprobs[next_id])
-            self._llm.eval([next_id])
+            self._llm_backend.decode([next_id])
 
         return total_log_prob
 
@@ -310,7 +310,7 @@ class ModelInstance:
         :returns: Sum of per-token log-probabilities for all generated tokens,
             or ``0.0`` if EOS is sampled on the first step.
         """
-        eos_id = self._llm.token_eos()
+        eos_id = self._llm_backend.token_eos()
         total_log_prob = 0.0
         method_rng = resolve_rng(
             self._rng if rng is None else rng,
@@ -318,14 +318,14 @@ class ModelInstance:
         )
 
         for _ in range(max_tokens):
-            logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+            logprobs = self._log_softmax(self._llm_backend.last_logits())
             next_id = int(np.argmax(logprobs + method_rng.gumbel(size=len(logprobs))))
 
             if next_id == eos_id:
                 break
 
             total_log_prob += float(logprobs[next_id])
-            self._llm.eval([next_id])
+            self._llm_backend.decode([next_id])
 
         return total_log_prob
 
