@@ -93,7 +93,7 @@ class ModelInstance:
         else:
             self._llm_backend = ModelLlamaBackend(self._llm)
 
-# Calculate number of bytes needed in Llama cache.
+        # Calculate number of bytes needed in Llama cache.
         arch = self._llm_backend.metadata()['general.architecture']
         n_layers = int(self._llm_backend.metadata()[f'{arch}.block_count'])
         n_kv_heads = int(self._llm_backend.metadata()[f'{arch}.attention.head_count_kv'])
@@ -101,16 +101,16 @@ class ModelInstance:
         head_dim = int(self._llm_backend.metadata()[f'{arch}.embedding_length']) // n_heads
         bytes_per_state = self._llm_backend.n_ctx() * 2 * n_layers * n_kv_heads * head_dim * 2
 
-# Initialise and set cache and context.
+        # Initialise and set cache and context.
         self._cache = LlamaRAMCache(capacity_bytes=4 * bytes_per_state)
         self._llm.set_cache(self._cache)
         self.context = context
         self._initial_context_length: int = len(self.context)
 
-# Set up RNG handling.
+        # Set up RNG handling.
         self._rng = resolve_rng(rng, stream='global')
 
-# Vocabulary pruning stuff (important for computationally intensive probability adjustments).
+        # Vocabulary pruning stuff (important for computationally intensive probability adjustments).
         self._candidate_factory = CandidateGeneratorFactory()
 
 
@@ -270,10 +270,10 @@ class ModelInstance:
         self._llm_backend.reset()
         self._llm_backend.decode(context_tokens)
 
-# Snapshot the KV cache and logits immediately after evaluating the
-# context.  Restoring this state before generation ensures the branch
-# always starts from the clean post-context position and is not
-# affected by any internal bookkeeping inside save_live_state.
+        # Snapshot the KV cache and logits immediately after evaluating the
+        # context.  Restoring this state before generation ensures the branch
+        # always starts from the clean post-context position and is not
+        # affected by any internal bookkeeping inside save_live_state.
         pre_branch_state = self.save_live_state()
         self.load_live_state(pre_branch_state)
 
@@ -285,13 +285,13 @@ class ModelInstance:
         )
 
         for _ in range(max_tokens):
-# scores[n_tokens - 1] is the most recently decoded logit row,
-# valid for logits_all=True (filled by eval's n_past slice).
+            # scores[n_tokens - 1] is the most recently decoded logit row,
+            # valid for logits_all=True (filled by eval's n_past slice).
             logprobs = self._log_softmax(self._llm_backend.last_logits())
 
-# Gumbel-max trick: argmax(log p + Gumbel(0,1)) is equivalent to
-# drawing from categorical(softmax(log p)) without materialising
-# the full probability vector.
+            # Gumbel-max trick: argmax(log p + Gumbel(0,1)) is equivalent to
+            # drawing from categorical(softmax(log p)) without materialising
+            # the full probability vector.
             next_id = int(np.argmax(logprobs + method_rng.gumbel(size=len(logprobs))))
 
             if next_id == eos_id:
@@ -507,7 +507,7 @@ class ModelInstance:
         :returns: ``LLMOutputDataFull`` containing the model's response,
             candidate tokens at each step, and logprobs.
         """
-# Hyperparam and sampling setup.
+        # Hyperparam and sampling setup.
         if not self._logits_all:
             msg = (
                 'generate_adjusted() requires logits_all=True when constructing ModelInstance '
@@ -522,7 +522,7 @@ class ModelInstance:
                 sampling_method = getattr(adjust_fn, '__name__', type(adjust_fn).__name__)
         candidate_generator = self._candidate_factory.get_candidate_generator(top_k, top_p)
 
-# Parameter warnings.
+        # Parameter warnings.
         _logger.info('Generation with adjusted probabilities started')
         if top_k < ADEQUATE_TOPK:
             _logger.warning(
@@ -534,19 +534,19 @@ class ModelInstance:
             )
 
 
-# Data storage variables setup.
+        # Data storage variables setup.
         prev_probs: list[float] = []
         response_prob_tokens: list[str] = []
         response_prob_values: list[float] = []
         response_topk_dists: list[dict[str, float]] = []
 
-# LLM state setup.
+        # LLM state setup.
         eos_id = self._llm_backend.token_eos()
         context = self._format_chat_prompt()
         self._llm_backend.reset()
         self._llm_backend.decode(context)
 
-# Main generation loop.
+        # Main generation loop.
         method_rng = resolve_rng(
             self._rng if rng is None else rng,
             stream='llama.generate_adjusted',
@@ -556,11 +556,11 @@ class ModelInstance:
             cast(Callable[[], None], reset_fn)()
         for step in tqdm(range(max_tokens), desc='generate_adjusted', unit='tok'):
 
-# Determine logprobs and sample intersection of top-k and top-p.
+            # Determine logprobs and sample intersection of top-k and top-p.
             logprobs = self._log_softmax(self._llm_backend.last_logits())
             candidates = candidate_generator(logprobs)
 
-# Skip adjustment and sampling if only one logprob.
+            # Skip adjustment and sampling if only one logprob.
             if len(candidates.candidate_ids) == 1:
                 sampled_id = int(candidates.candidate_ids[0])
                 token_prob = 1.0
@@ -604,15 +604,15 @@ class ModelInstance:
                     method_rng,
                 )
 
-# Resolve sampled token IDs for EOS checks and optional commit.
+            # Resolve sampled token IDs for EOS checks and optional commit.
             token_ids = [sampled_id]
 
-# Check for end, call decode() if continuing.
+            # Check for end, call decode() if continuing.
             if not token_ids or eos_id in token_ids:
                 break
             self._llm_backend.decode(token_ids)
 
-# Assign various data variables for safekeeping.
+            # Assign various data variables for safekeeping.
             token_str = self._tokens_as_strings([sampled_id])[0]
             adjusted = self._candidate_tokens_to_logprob_map(adjusted_candidates)
             _logger.debug(
@@ -626,7 +626,7 @@ class ModelInstance:
 
         _logger.info('Generation with adjusted probabilities complete.')
 
-# Construct dataclass output.
+        # Construct dataclass output.
         return LLMOutputDataFull(
             context=self._tokens_as_strings(context[:self._initial_context_length]),
             hyperparams=Hyperparams(
