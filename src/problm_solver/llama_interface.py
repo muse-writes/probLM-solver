@@ -188,13 +188,13 @@ class ModelInstance:
             stream='llama.query_log_probs',
         )
         for _ in range(max_tokens):
-            logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+            logprobs = self._log_softmax(self._llm_backend.last_logits())
             next_id = int(np.argmax(logprobs + method_rng.gumbel(size=len(logprobs))))
             if next_id == eos_id:
                 break
             tokens.append(self._tokens_as_strings([next_id])[0])
             probs.append(float(np.exp(logprobs[next_id])))
-            self._llm.eval([next_id])
+            self._llm_backend.decode([next_id])
         return LLMTokenData(prompt=self.context, tokens=tokens, probs=probs)
 
 
