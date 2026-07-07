@@ -115,6 +115,9 @@ class ModelCBackend(ModelBackendGeneric):
             'llama_batch_free',
             'llama_decode',
             'llama_get_logits',
+            'llama_get_model',
+            'llama_model_get_vocab',
+            'llama_vocab_n_tokens',
         )
         missing = [name for name in required if not hasattr(c_api, name)]
         if missing:
