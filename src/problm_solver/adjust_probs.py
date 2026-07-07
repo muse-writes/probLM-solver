@@ -10,6 +10,7 @@ import numpy as np
 import numpy.typing as npt
 from tqdm import tqdm
 
+from problm_solver.candidates import CandidateTokens
 from problm_solver.random import RNGLike, resolve_rng
 
 # -- Module-wide setup -- #
@@ -25,26 +26,27 @@ class GenerationContext:
     access model-querying capabilities without a direct dependency on
     ``ModelInstance``. All mutable fields are defensive copies.
 
-    :param token_probs: Current top-M mapping of token string to log-probability.
+    :param token_id_probs: Current top-k candidate token IDs and log-probabilities.
     :param prev_probs: Normalised probabilities of all previously selected
         tokens in this generation. Empty on the first step.
     :param context_tokens: The current token ID sequence (prompt + generated
         tokens so far).
-    :param query_next: Queries the model for the top-M next-token log-prob
-        dict given a context token ID list. Pre-bound to the current
-        ``n_tokens``.
+    :param query_next_id: Queries the model for top-k next-token candidates in
+        token-ID space given a context token ID list.
     :param query_branch: Generates a complete branch of up to ``depth`` tokens
         from the given context in a single model call and returns the sum of
         per-token log-probabilities. Returns ``0.0`` on immediate EOS.
-    :param tokenize_token: Converts a single token string to its token ID(s).
+    :param query_branch_from_live: Generates a complete branch of up to
+        ``depth`` tokens from the model's currently loaded live state and
+        returns the sum of per-token log-probabilities. Optional.
     """
 
-    token_probs: dict[str, float]
+    token_id_probs: CandidateTokens
     prev_probs: list[float]
     context_tokens: list[int]
-    query_next: Callable[[list[int]], dict[str, float]]
+    query_next_id: Callable[[list[int]], CandidateTokens]
     query_branch: Callable[[list[int], int], float]
-    tokenize_token: Callable[[str], list[int]]
+    query_branch_from_live: Callable[[int], float] | None = None
     base_live_state: Any | None = None
     query_next_ids_from_live: Callable[[int], list[tuple[int, float]]] | None = None
     save_live_state: Callable[[], Any] | None = None
@@ -52,22 +54,40 @@ class GenerationContext:
     eval_tokens: Callable[[list[int]], None] | None = None
 
 
-# Callable that receives a GenerationContext and returns a modified log-prob
-# dict. Values need not be normalised; renormalisation is applied by
-# sample_from_logprobs before sampling.
-AdjustFn = Callable[[GenerationContext], dict[str, float]]
+# Callable that receives a GenerationContext and returns adjusted
+# token-ID candidates with log-probabilities.
+type AdjustFn = Callable[[GenerationContext], CandidateTokens]
 
 
-def adjust_identity(context: GenerationContext) -> dict[str, float]:
-    """Return token log-probabilities unchanged.
+def candidate_tokens_to_id_logprobs(candidates: CandidateTokens) -> dict[int, float]:
+    """Convert CandidateTokens to an insertion-ordered token-id logprob map."""
+    return {
+        int(tid): float(lp)
+        for tid, lp in zip(
+            candidates.candidate_ids,
+            candidates.candidate_logprobs,
+            strict=True,
+        )
+    }
 
-    Satisfies the :data:`AdjustFn` interface without modifying the
-    distribution. Useful as a baseline and for testing.
 
-    :param context: The current generation context.
-    :returns: ``context.token_probs`` unmodified.
-    """
-    return context.token_probs
+def id_logprobs_to_candidate_tokens(id_logprobs: dict[int, float]) -> CandidateTokens:
+    """Convert token-id logprob map to CandidateTokens preserving insertion order."""
+    items = list(id_logprobs.items())
+    if not items:
+        return CandidateTokens(
+            candidate_ids=np.empty(0, dtype=np.int32),
+            candidate_logprobs=np.empty(0, dtype=np.float64),
+        )
+
+    ids = np.array([tid for tid, _ in items], dtype=np.int32)
+    lps = np.array([lp for _, lp in items], dtype=np.float64)
+    return CandidateTokens(candidate_ids=ids, candidate_logprobs=lps)
+
+
+def adjust_identity(context: GenerationContext) -> CandidateTokens:
+    """Return token log-probabilities unchanged in token-ID space."""
+    return context.token_id_probs
 
 
 class SampleLowTemp:
@@ -95,25 +115,46 @@ class SampleLowTemp:
             probabilities when computing the adjustment.
         """
         self.alpha = alpha
+        self._prev_len = 0
+        self._prev_logprob_sum = 0.0
 
-    def __call__(self, context: GenerationContext) -> dict[str, float]:
-        """Apply power-scaling adjustment to the current token distribution.
+    def reset(self) -> None:
+        """Reset rolling history state for a new generation."""
+        self._prev_len = 0
+        self._prev_logprob_sum = 0.0
 
-        :param context: The current generation context. Uses
-            ``context.token_probs`` and ``context.prev_probs``.
-        :returns: Adjusted log-probability mapping. Note that tokens with very
-            low probability may produce ``-inf`` log-probabilities after
-            scaling.
-        """
-        tokens = list(context.token_probs.keys())
-        lp = np.array([context.token_probs[t] for t in tokens], dtype=float)
+    def _history_log_shift(self, prev_probs: list[float]) -> float:
+        """Return rolling ``alpha * sum(log(prev_probs))`` for history scaling."""
+        cur_len = len(prev_probs)
+        if cur_len == 0:
+            self.reset()
+            return 0.0
+
+        if cur_len < self._prev_len:
+            self._prev_logprob_sum = float(np.sum(np.log(np.array(prev_probs, dtype=float))))
+        elif cur_len == self._prev_len + 1:
+            self._prev_logprob_sum += float(np.log(prev_probs[-1]))
+        elif cur_len == self._prev_len:
+            self._prev_logprob_sum = float(np.sum(np.log(np.array(prev_probs, dtype=float))))
+        else:
+            self._prev_logprob_sum = float(np.sum(np.log(np.array(prev_probs, dtype=float))))
+
+        self._prev_len = cur_len
+        return self.alpha * self._prev_logprob_sum
+
+    def __call__(self, context: GenerationContext) -> CandidateTokens:
+        """Apply power-scaling adjustment to the current token-ID distribution."""
+        candidate_ids = context.token_id_probs.candidate_ids
+        lp = context.token_id_probs.candidate_logprobs.astype(np.float64, copy=True)
         lp -= lp.max()
-        p: npt.NDArray = np.exp(lp)
-        prev_alpha = float(
-            np.prod(np.array(context.prev_probs, dtype=float) ** self.alpha)
+
+        prev_probs = context.prev_probs if context.prev_probs is not None else []
+        history_log_shift = self._history_log_shift(prev_probs)
+        new_logprobs: npt.NDArray[np.float64] = self.alpha * lp + history_log_shift
+        return CandidateTokens(
+            candidate_ids=candidate_ids.astype(np.int32, copy=False),
+            candidate_logprobs=new_logprobs,
         )
-        new_logprobs: npt.NDArray = np.log(p ** self.alpha * prev_alpha)
-        return dict(zip(tokens, list(new_logprobs), strict=True))
 
 
 class BranchSampler(ABC):
@@ -267,7 +308,7 @@ class BeamSampler(BranchSampler):
 
     This sampler performs deterministic beam search over lookahead tokens.
     For each candidate token, it repeatedly expands active beams using
-    ``query_next`` and keeps only the top ``beam_width`` cumulative
+    ``query_next_ids_from_live`` and keeps only the top ``beam_width`` cumulative
     log-probability branches at every depth.
 
     :param beam_width: Number of active beams retained per depth.
@@ -418,16 +459,13 @@ class SamplePowerDist:
         self.lookahead_depth = lookahead_depth
         self.branch_sampler = branch_sampler
 
-    def __call__(self, context: GenerationContext) -> dict[str, float]:
+    def __call__(self, context: GenerationContext) -> CandidateTokens:
         """Apply power-distribution adjustment using lookahead branch sampling.
 
-        :param context: The current generation context. Uses all fields:
-            ``token_probs``, ``context_tokens``, ``query_next``, and
-            ``tokenize_token``.
-        :returns: Adjusted log-probability mapping combining the current
-            token distribution with estimated future log-probabilities.
+        :param context: The current generation context in token-ID space.
+        :returns: Adjusted candidate token IDs with log-probabilities.
         """
-        result: dict[str, float] = {}
+        result: dict[int, float] = {}
 
         if self.branch_sampler.supports_token_beam:
             if (
@@ -458,43 +496,88 @@ class SamplePowerDist:
                     eval_tokens=eval_tokens,
                 )
         else:
-            def score_future(branch_ctx: list[int]) -> np.float64:
-                branch_log_probs_list: list[float] = []
-                self.branch_sampler.reset()
+            has_live_branch = (
+                context.query_branch_from_live is not None
+                and context.base_live_state is not None
+                and context.save_live_state is not None
+                and context.load_live_state is not None
+                and context.eval_tokens is not None
+            )
 
-                while True:
-                    proposed_branch_log_prob = context.query_branch(
-                        branch_ctx, self.lookahead_depth
-                    )
+            if has_live_branch:
+                base_live_state = context.base_live_state
+                query_branch_from_live = context.query_branch_from_live
+                save_live_state = context.save_live_state
+                load_live_state = context.load_live_state
+                eval_tokens = context.eval_tokens
 
-                    accepted_log_prob = self.branch_sampler.step(
-                        proposed_log_prob=proposed_branch_log_prob,
-                        alpha=self.alpha,
-                    )
-                    branch_log_probs_list.append(accepted_log_prob)
+                def score_future_from_candidate_id(candidate_id: int) -> np.float64:
+                    load_live_state(base_live_state)
+                    eval_tokens([candidate_id])
+                    candidate_root_state = save_live_state()
 
-                    if not self.branch_sampler.should_continue(
-                        np.array(branch_log_probs_list, dtype=np.float64)
-                    ):
-                        break
+                    branch_log_probs_list: list[float] = []
+                    self.branch_sampler.reset()
 
-                branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
-                return self.branch_sampler.future_logprob(self.alpha, branch_log_probs)
+                    while True:
+                        load_live_state(candidate_root_state)
+                        proposed_branch_log_prob = query_branch_from_live(self.lookahead_depth)
+
+                        accepted_log_prob = self.branch_sampler.step(
+                            proposed_log_prob=proposed_branch_log_prob,
+                            alpha=self.alpha,
+                        )
+                        branch_log_probs_list.append(accepted_log_prob)
+
+                        if not self.branch_sampler.should_continue(
+                            np.array(branch_log_probs_list, dtype=np.float64)
+                        ):
+                            break
+
+                    branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
+                    return self.branch_sampler.future_logprob(self.alpha, branch_log_probs)
+            else:
+                def score_future_from_candidate_id(candidate_id: int) -> np.float64:
+                    branch_ctx = list(context.context_tokens) + [candidate_id]
+                    branch_log_probs_list: list[float] = []
+                    self.branch_sampler.reset()
+
+                    while True:
+                        proposed_branch_log_prob = context.query_branch(
+                            branch_ctx,
+                            self.lookahead_depth,
+                        )
+
+                        accepted_log_prob = self.branch_sampler.step(
+                            proposed_log_prob=proposed_branch_log_prob,
+                            alpha=self.alpha,
+                        )
+                        branch_log_probs_list.append(accepted_log_prob)
+
+                        if not self.branch_sampler.should_continue(
+                            np.array(branch_log_probs_list, dtype=np.float64)
+                        ):
+                            break
+
+                    branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
+                    return self.branch_sampler.future_logprob(self.alpha, branch_log_probs)
+
+        candidate_ids = context.token_id_probs.candidate_ids
+        candidate_logprobs = context.token_id_probs.candidate_logprobs
 
         candidate_bar = tqdm(
-            context.token_probs.items(),
+            zip(candidate_ids, candidate_logprobs, strict=True),
             desc='candidates',
-            total=len(context.token_probs),
+            total=len(candidate_ids),
             unit='tok',
             leave=False,
         )
-        for token, log_prob in candidate_bar:
-            token_ids = context.tokenize_token(token)
+        for token_id, log_prob in candidate_bar:
+            tid = int(token_id)
             if self.branch_sampler.supports_token_beam:
-                future_lp = score_future(token_ids)
+                future_lp = score_future([tid])
             else:
-                branch_ctx = list(context.context_tokens) + token_ids
-                future_lp = score_future(branch_ctx)
-            result[token] = self.alpha * log_prob + future_lp
+                future_lp = score_future_from_candidate_id(tid)
+            result[tid] = self.alpha * float(log_prob) + float(future_lp)
 
-        return result
+        return id_logprobs_to_candidate_tokens(result)
