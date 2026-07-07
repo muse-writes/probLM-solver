@@ -94,11 +94,12 @@ class ModelInstance:
             self._llm_backend = ModelLlamaBackend(self._llm)
 
         # Calculate number of bytes needed in Llama cache.
-        arch = self._llm_backend.metadata()['general.architecture']
-        n_layers = int(self._llm_backend.metadata()[f'{arch}.block_count'])
-        n_kv_heads = int(self._llm_backend.metadata()[f'{arch}.attention.head_count_kv'])
-        n_heads = int(self._llm_backend.metadata()[f'{arch}.attention.head_count'])
-        head_dim = int(self._llm_backend.metadata()[f'{arch}.embedding_length']) // n_heads
+        metadata = self._llm_backend.metadata()
+        arch = metadata['general.architecture']
+        n_layers = int(metadata[f'{arch}.block_count'])
+        n_kv_heads = int(metadata[f'{arch}.attention.head_count_kv'])
+        n_heads = int(metadata[f'{arch}.attention.head_count'])
+        head_dim = int(metadata[f'{arch}.embedding_length']) // n_heads
         bytes_per_state = self._llm_backend.n_ctx() * 2 * n_layers * n_kv_heads * head_dim * 2
 
         # Initialise and set cache and context.
@@ -110,7 +111,8 @@ class ModelInstance:
         # Set up RNG handling.
         self._rng = resolve_rng(rng, stream='global')
 
-        # Vocabulary pruning stuff (important for computationally intensive probability adjustments).
+        # Vocabulary pruning stuff (important for computationally intensive probability
+        # adjustments).
         self._candidate_factory = CandidateGeneratorFactory()
 
 
@@ -553,7 +555,7 @@ class ModelInstance:
         )
         reset_fn = getattr(adjust_fn, 'reset', None)
         if callable(reset_fn):
-            cast(Callable[[], None], reset_fn)()
+            cast('Callable[[], None]', reset_fn)()
         for step in tqdm(range(max_tokens), desc='generate_adjusted', unit='tok'):
 
             # Determine logprobs and sample intersection of top-k and top-p.
