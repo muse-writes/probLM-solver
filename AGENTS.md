@@ -132,6 +132,7 @@ cli.py → TqdmHandler (utils.py)
 - **Docstring Convention**: reStructuredText / PEP 257 (`:param:`, `:returns:` directives)
 - **Quotes**: Single (inline and multiline)
 - **Imports**: Absolute only (`ban-relative-imports = "all"`)
+- **Comment placement**: Prefer comments starting at column 0.
 
 ### Code Organisation Preference
 - Prefer helper functions to be defined at module/class scope (e.g., under the helper section at the bottom of `llama_interface.py`) rather than nested inside hot-path methods, unless closure capture is explicitly required.
