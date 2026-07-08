@@ -1,3 +1,31 @@
+## v1.5.0 (2026-07-08)
+
+### BREAKING CHANGE
+
+- `GenerationContext` and in-built samplers now take the
+substantially modified set of variables which use token ID integers
+rather than decoded strings.
+
+### Feat
+
+- **backend**: Manual memory management for decode and logits viewing
+- `ModelInstance` now relies upon low-level backend
+- Added stats and protocol for typing to low-level API
+- Added template file for Llama C API backend.
+- low temperature sampling now tracks previous probabilities.
+- Switched context dataclass and internals to use token by ID.
+- Migrated candidate generation to use token ids.
+- Added candidates.py for internal handling of token IDs and probs
+
+### Fix
+
+- C backend now checks for all required functions
+- migrate query_log_probs loop to use backend API consistently
+- Variable storage in `ModelInstance` initialisation
+- indent all section comments in llama_interface.py to PEP8 standard
+- Harmonised backend use in `ModelInstance`.
+- Power distribution sampling now effectively handles live state.
+
 ## v1.4.0 (2026-06-29)
 
 ### BREAKING CHANGE
