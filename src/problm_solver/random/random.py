@@ -17,7 +17,7 @@ class RandomManager:
     """
 
     def __init__(self, seed: int = 314159) -> None:
-        """Initialise random manager.
+        """Initialize random manager.
 
         :param seed: Root integer seed for all derived streams.
         """
@@ -61,7 +61,7 @@ class RandomManager:
 
         :param stream: Stream name.
         :param index: Stream-local spawn index.
-        :returns: Stable seed sequence for deterministic RNG initialisation.
+        :returns: Stable seed sequence for deterministic RNG initialization.
         """
         digest = hashlib.blake2b(stream.encode('utf-8'), digest_size=16).digest()
         stream_words = np.frombuffer(digest, dtype=np.uint32).tolist()

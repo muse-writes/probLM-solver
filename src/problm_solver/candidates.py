@@ -81,7 +81,7 @@ class CandidateGeneratorFactory:
 
     @staticmethod
     def _top_p_tokens_high(logprobs: npt.NDArray[np.float64], top_p: np.float64) -> CandidateTokens:
-        """Top-p selection optimised for high ``top_p`` via a single full sort."""
+        """Top-p selection optimized for high ``top_p`` via a single full sort."""
         if len(logprobs) == 0:
             return CandidateTokens(
                 candidate_ids=np.empty(0, dtype=np.int32),
@@ -103,7 +103,7 @@ class CandidateGeneratorFactory:
 
     @staticmethod
     def _top_p_tokens_low(logprobs: npt.NDArray[np.float64], top_p: np.float64) -> CandidateTokens:
-        """Top-p selection optimised for low ``top_p`` via adaptive top-k growth."""
+        """Top-p selection optimized for low ``top_p`` via adaptive top-k growth."""
         if len(logprobs) == 0:
             return CandidateTokens(
                 candidate_ids=np.empty(0, dtype=np.int32),

@@ -7,7 +7,7 @@ from problm_solver.random import RNGLike, resolve_rng
 
 
 def prob_of_token(token: str, log_probs: dict[str, float]) -> float:
-    """Return the normalised probability of a specific token from a log-prob dict.
+    """Return the normalized probability of a specific token from a log-prob dict.
 
     Applies the same shift-exp-normalise procedure as
     :func:`sample_from_logprobs`, then returns the scalar probability for
@@ -15,7 +15,7 @@ def prob_of_token(token: str, log_probs: dict[str, float]) -> float:
 
     :param token: The token string to look up. Must be a key in ``log_probs``.
     :param log_probs: Mapping of token string to log-probability.
-    :returns: The normalised probability of ``token`` in the distribution,
+    :returns: The normalized probability of ``token`` in the distribution,
         in the range (0, 1].
     :raises KeyError: If ``token`` is not present in ``log_probs``.
     """
@@ -33,7 +33,7 @@ def sample_from_logprobs(
 ) -> str:
     """Sample a token from a log-probability distribution.
 
-    Converts log-probabilities to probabilities via ``exp()``, renormalises,
+    Converts log-probabilities to probabilities via ``exp()``, renormalizes,
     and returns a single sampled token string.
 
     :param log_probs: Mapping of token string to log-probability. Values do

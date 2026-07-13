@@ -34,7 +34,7 @@ class ModelBackendGeneric(Protocol):
         ...
 
     def decode(self, token_ids: list[int]) -> None:
-        """Decode with a re-usable batch."""
+        """Decode with a reusable batch."""
         ...
 
     def last_logits(self) -> npt.NDArray[np.float32]:
@@ -161,7 +161,7 @@ class ModelCBackend(ModelBackendGeneric):
         self._llm.reset()
 
     def decode(self, token_ids: list[int]) -> None:
-        """Decode with a re-usable batch."""
+        """Decode with a reusable batch."""
         if not token_ids:
             return
 
@@ -325,7 +325,7 @@ class ModelLlamaBackend(ModelBackendGeneric):
         self._llm.reset()
 
     def decode(self, token_ids: list[int]) -> None:
-        """Decode with a re-usable batch."""
+        """Decode with a reusable batch."""
         self._llm.eval(token_ids)
         self._stats = BackendStats(
             decode_calls = self._stats.decode_calls + 1,

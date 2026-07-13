@@ -19,9 +19,9 @@ def resolve_rng(
     :param stream: Named stream for :class:`RandomManager` objects.
     :param default_manager: Fallback manager, used when calling
         :meth:`resolve_rng` in classes that manage their own RNG state.
-    :param fresh: Whether or not to reinitialise a generator (should be
+    :param fresh: Whether or not to reinitialize a generator (should be
         ``False`` in most cases).
-    :returns: A numpy generator exhibiting specified behaviour.
+    :returns: A numpy generator exhibiting specified behavior.
     """
     if isinstance(rng, np.random.Generator):
         if fresh:

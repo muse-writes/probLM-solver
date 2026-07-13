@@ -64,7 +64,7 @@ class ModelInstance:
         for shared prefix entries.
 
         :param fname: absolute path of the model .gguf file.
-        :param context: query that the model is initialised with.
+        :param context: query that the model is initialized with.
         :param n_ctx: context window size in tokens. Must be large enough to
             hold the formatted prompt plus ``max_tokens`` of generated output.
             Defaults to 4096, which comfortably fits MATH500 problems
@@ -102,7 +102,7 @@ class ModelInstance:
         head_dim = int(metadata[f'{arch}.embedding_length']) // n_heads
         bytes_per_state = self._llm_backend.n_ctx() * 2 * n_layers * n_kv_heads * head_dim * 2
 
-        # Initialise and set cache and context.
+        # Initialize and set cache and context.
         self._cache = LlamaRAMCache(capacity_bytes=4 * bytes_per_state)
         self._llm.set_cache(self._cache)
         self.context = context
@@ -504,7 +504,7 @@ class ModelInstance:
         :param top_p: Threshold total probability of retrieved tokens.
         :param adjust_fn: Callable that receives a ``GenerationContext`` and
             returns adjusted candidate token IDs/log-probabilities as
-            ``CandidateTokens``. Values do not need to be normalised.
+            ``CandidateTokens``. Values do not need to be normalized.
         :param max_tokens: Maximum number of tokens to generate.
         :returns: ``LLMOutputDataFull`` containing the model's response,
             candidate tokens at each step, and logprobs.
@@ -658,12 +658,13 @@ class ModelInstance:
     ) -> dict[str, Any]:
         """Sample exactly one token from an adjusted next-token distribution.
 
-        This method is optimised for iterative decoding: when ``use_live_state``
+        This method is optimized for iterative decoding: when ``use_live_state``
         is ``True`` and the model already has decoded tokens
-        (``self._llm.n_tokens > 0``), it *does not* rebuild prompt/KV state and
-        samples directly from the current live logits.
+        (``self._llm_backend.n_tokens > 0``), it *does not* rebuild prompt/KV
+        state and samples directly from the current live logits.
 
-        Fallback behaviour:
+        Fallback behavior:
+
         - if ``use_live_state=False``: always rebuild state from
           ``context_tokens`` (if provided) or the formatted prompt.
         - if ``use_live_state=True`` but no live state exists: rebuild from
@@ -678,7 +679,7 @@ class ModelInstance:
         :param prev_probs: Optional previously sampled token probabilities,
             passed through to ``GenerationContext``.
         :param commit_token: Whether to append the sampled token to the live
-            model state via ``eval(token_ids)`` when non-terminal.
+            model state via ``decode(token_ids)`` when non-terminal.
         :returns: A dictionary containing candidate distributions before/after
             adjustment and details of the sampled token.
         """
