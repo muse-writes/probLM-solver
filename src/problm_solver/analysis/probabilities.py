@@ -37,7 +37,7 @@ def sample_from_logprobs(
     and returns a single sampled token string.
 
     :param log_probs: Mapping of token string to log-probability. Values do
-        not need to correspond to a normalised distribution — renormalisation
+        not need to correspond to a normalized distribution — renormalization
         is applied before sampling.
     :returns: A single sampled token string drawn from the distribution.
     """
