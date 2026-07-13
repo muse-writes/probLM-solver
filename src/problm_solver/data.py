@@ -129,8 +129,8 @@ class LLMNextTokenData:
         :param prompt: The original user prompt.
         :param output_vec: The current token ID sequence (prompt + generated
             tokens so far).
-        :param top_m_tokens: Mapping of token string to log-probability for
-            the top M candidate next tokens at this position.
+        :param top_k_tokens: Mapping of token string to log-probability for
+            the top K candidate next tokens at this position.
         """
         self.prompt = prompt
         self.output_vec = output_vec
@@ -189,7 +189,7 @@ class LLMOutputDataFull:
 
     Includes various parameters as strings, as well as top-k finalised token probabilities.
 
-    :param context: Tokenised context provided to the model.
+    :param context: Tokenized context provided to the model.
     :param hyperparams: Nested dataclass for hyperparameter storage.
     :param response_probabilities: response tokens and their context-dependent selection
         probabilities after adjustment.
@@ -206,7 +206,7 @@ class LLMOutputDataFull:
     sampling_method: str
     branch_sampler: str | None
 
-# Unsaved data state tracking variable.
+    # Unsaved data state tracking variable.
     _written: bool = field(default=False, repr=False)
 
     def write(self, fname: str) -> None:

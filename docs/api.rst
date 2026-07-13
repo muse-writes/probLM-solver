@@ -57,6 +57,17 @@ dictionaries returned by the model.
 
 ----
 
+Random number generation
+------------------------
+
+Utilities for managing deterministic random streams across the library.
+
+.. automodule:: problm_solver.random
+   :members:
+   :show-inheritance:
+
+----
+
 CLI
 ---
 

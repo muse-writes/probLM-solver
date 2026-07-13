@@ -46,7 +46,7 @@ git checkout -b [your-feature-name]
 ```
 Branch names should be short and descriptive.
 
-Use `uv` from the project's directory to create and synchronise the virtual environment,
+Use `uv` from the project's directory to create and synchronize the virtual environment,
 ```Bash
 uv sync --python 3.13 --all-extras
 ```
@@ -59,7 +59,7 @@ This virtual environment can be used in a shebang for Python scripts that work f
 ```Python
 #!/path/to/probLM-solver/.venv/bin/python
 
-from problm_solver import llama_interface.ModelInstance
+from problm_solver.llama_interface import ModelInstance
 ...
 ```
 

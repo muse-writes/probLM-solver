@@ -27,7 +27,7 @@ class GenerationContext:
     ``ModelInstance``. All mutable fields are defensive copies.
 
     :param token_id_probs: Current top-k candidate token IDs and log-probabilities.
-    :param prev_probs: Normalised probabilities of all previously selected
+    :param prev_probs: Normalized probabilities of all previously selected
         tokens in this generation. Empty on the first step.
     :param context_tokens: The current token ID sequence (prompt + generated
         tokens so far).
@@ -99,7 +99,7 @@ class SampleLowTemp:
     log-probabilities for downstream renormalisation and sampling.
 
     :param alpha: Scaling exponent. Values greater than 1 sharpen the
-        distribution (favouring already-likely tokens); values between 0
+        distribution (favoring already-likely tokens); values between 0
         and 1 flatten it.
 
     Example usage::
@@ -109,7 +109,7 @@ class SampleLowTemp:
     """
 
     def __init__(self, alpha: float) -> None:
-        """Initialise with scaling exponent.
+        """Initialize with scaling exponent.
 
         :param alpha: Exponent applied to current and previous token
             probabilities when computing the adjustment.
@@ -238,7 +238,7 @@ class MetropolisSampler(BranchSampler):
         tolerance: float = 1e-1,
         rng: RNGLike = None
     ) -> None:
-        """Initialise with convergence parameters."""
+        """Initialize with convergence parameters."""
         self._current_log_prob: float | None = None
         self._equil_branches = equil_branches
         self._max_branches = max_branches
@@ -319,7 +319,7 @@ class BeamSampler(BranchSampler):
     supports_token_beam = True
 
     def __init__(self, beam_width: int = 3, branch_top_k: int = 5) -> None:
-        """Initialise beam-search width and per-beam expansion width."""
+        """Initialize beam-search width and per-beam expansion width."""
         if beam_width < 1:
             msg = f'beam_width must be >= 1, got {beam_width}'
             raise ValueError(msg)
@@ -448,7 +448,7 @@ class SamplePowerDist:
         lookahead_depth: int,
         branch_sampler: BranchSampler,
     ) -> None:
-        """Initialise with lookahead parameters and a branch sampler.
+        """Initialize with lookahead parameters and a branch sampler.
 
         :param alpha: Scaling exponent for the current token log-probability.
         :param lookahead_depth: Maximum depth of each branch.

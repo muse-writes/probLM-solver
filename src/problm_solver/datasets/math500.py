@@ -11,7 +11,7 @@ def get_data(fname: str | None = None) -> pd.DataFrame:
     """Download the MATH500 dataset and store it as a pandas :class:`DataFrame`.
 
     Basic function for getting MATH500. Logs the download and returns the data.
-    Data is organised into six columns:
+    Data is organized into six columns:
     - ``problem``: str
     - ``solution``: str
     - ``answer``: str

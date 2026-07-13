@@ -25,7 +25,7 @@ To get started with using the CLI for already-implemented samplers and generatin
 
 .. sourcecode:: bash
 
-   $ docker compose up app
+   $ docker compose --profile app up app
 
 You will be asked to provide a ``.gguf`` model file in the directory ``~/.problm-solver/models``
 
@@ -89,7 +89,7 @@ Sampling Token-by-token
 -----------------------
 
 The previous section introduced the function :meth:`generate_adjusted()` to generate outputs based on a provided context and sampling function.
-It may sometimes be desirable for the user to generate one token at a time, to either switch sampling functions out or analyse specific probabilities.
+It may sometimes be desirable for the user to generate one token at a time, to either switch sampling functions out or analyze specific probabilities.
 This is where the method :meth:`ModelInstance.sample_token_adjusted()` is used.
 See the following example:
 
@@ -112,16 +112,16 @@ See the following example:
        adjust_fn=sampling_func,
    )
 
-Where ``token_data`` is a dictionary of useful quantities, including candidate probabilities before and after adjustment (``token_data['candidates_before_adjustment']`` and ``token_data['candidates_after_adjustment']`` respectively) and the sampled token  and its probability, ``token_data['sampled_token']``.
+Where ``token_data`` is a dictionary of useful quantities, including candidate distributions before and after adjustment (``token_data['candidates_before_adjustment']`` and ``token_data['candidates_after_adjustment']`` respectively) and the sampled token, its ID, log-probability and probability in ``token_data['sampled_token']``.
 
 
 Sampling from the Power Distribution
 ------------------------------------
 
-Recent developments in LLM sampling methods have pointed out that sharper distributions yield more favourable outputs.
-Whilst low-temperature sampling goes a way towards solving this issue, it only considers previous tokens outputted when sampling, rather than favouring tokens that may have potential future minima.
+Recent developments in LLM sampling methods have pointed out that sharper distributions yield more favorable outputs.
+Whilst low-temperature sampling goes a way towards solving this issue, it only considers previous tokens outputted when sampling, rather than favoring tokens that may have potential future minima.
 
-At considerable computational expense, sampling from the power distribution can be performed by performing look-ahead runs, and utilising their probabilities before sampling.
+At considerable computational expense, sampling from the power distribution can be performed by performing look-ahead runs, and utilizing their probabilities before sampling.
 
 This code implements a general framework for sampling from the power distribution.
 Let's start with the code snippet below. In this example we use the built-in Metropolis method to sample potential future branches, inspired by the implementation from `Karan and Du`_.
@@ -221,7 +221,7 @@ It implements four required methods (plus an optional beam hook):
            ...
 
 
-- ``BranchSampler.reset()`` ought to reset any state variables (the Metropolis method tracks the current most-favourable logarithmic probability, for instance).
+- ``BranchSampler.reset()`` ought to reset any state variables (the Metropolis method tracks the current most-favorable logarithmic probability, for instance).
 - ``BranchSampler.step()`` controls criteria for accepting/rejecting a new branch log-probability and returns the chosen probability.
 - ``BranchSampler.should_continue()`` handles logic for terminating proposal sampling.
 - ``BranchSampler.future_logprob()`` combines collected branch log-probabilities into one future score used by ``SamplePowerDist``.

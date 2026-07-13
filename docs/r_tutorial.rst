@@ -117,9 +117,10 @@ Bear in mind that a sampling function takes a generic dataclass ``GenerationCont
     :linenos:
 
     sampling_fn <- function(context) {
-      token_probs <- py_to_r(context$token_probs)
-      # Modify log probabilities as needed...
-      token_probs
+      token_id_probs <- py_to_r(context$token_id_probs)
+      # Modify candidate log probabilities as needed...
+      # The function must return a CandidateTokens-like object.
+      token_id_probs
     }
 
     py_sampling_fn <- r_to_py(sampling_fn)

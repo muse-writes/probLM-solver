@@ -1,7 +1,7 @@
 # Minimal Sphinx Makefile
 # Run `make html` to build, `make clean` to wipe the build directory.
 # Install build dependencies first:
-#   uv add --dev sphinx sphinx-autodoc-typehints furo
+#   uv add --dev sphinx sphinx-autodoc-typehints shibuya
 
 SPHINXOPTS  ?=
 SPHINXBUILD ?= sphinx-build
