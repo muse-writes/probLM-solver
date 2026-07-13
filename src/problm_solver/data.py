@@ -187,7 +187,7 @@ class Hyperparams:
 class LLMOutputDataFull:
     """A fuller dataclass than `LLMOutputData`.
 
-    Includes various parameters as strings, as well as top-k finalized token probabilities.
+    Includes various parameters as strings, as well as top-k finalised token probabilities.
 
     :param context: Tokenized context provided to the model.
     :param hyperparams: Nested dataclass for hyperparameter storage.
