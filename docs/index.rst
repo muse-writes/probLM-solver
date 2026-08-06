@@ -4,7 +4,7 @@ probLM-solver
 .. rubric:: Overview
 
 A Python library built on top of `llama.cpp <https://github.com/ggerganov/llama.cpp>`_
-that allows for easy creation and application of token-by-token sampling methods.
+that allows for easy creation and application of token-by-token sampling methods and algorithms.
 
 .. rubric:: Quick links
 
