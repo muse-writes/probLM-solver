@@ -2,33 +2,37 @@
 
 # probLM-solver
 
-A python library and CLI app built on top of llama.cpp which can generate and modify language model outputs based on internal probabilities. Included are utilities for generating large numbers of LLM outputs for performing statistical analysis, as well as outputting and modifying token-by-token conditional probabilities for a given output.
+A Python library enabling researchers to prototype and develop sampling methods in large language models (LLMs) based on internal probabilities. Included are utilities for writing complex sampling functions in Python and running local models (with llama.cpp as a backend) that use them.
 
-Of particular importance is the ability to define sampling functions for token generation, based off of the answer's power distribution, via iteratively sampling branches of future tokens.
+This library ensures researchers can sample token-by-token, analyse logits, and assess the probability of given outputs.
 
-This library is currently in active development, so expect large changes.
+This library is currently in active development, and looking for feature requests. Breaking changes will be kept to a minimum, and loudly declared in the changelog where they are unavoidable.
 
 ## Usage
 
 ### Bare Metal
+
+
+To install this package as a library, please run:
+
+```sh
+pip install problm-solver
+```
+
+to install the latest release in your desired virtual environment.
+
+For the latest main branch, please clone the repository and install via,
+
+```sh
+python3 -m pip install /path/to/probLM-solver
+```
+If you need the project's working environment as a starting point, see the instructions below:
 
 This project is managed with uv, ensure you have Python, pip, and uv installed. To create and activate the virtual environment, run:
 
 ```sh
 uv sync --python 3.13 --no-dev
 source .venv/bin/activate
-```
-
-To install this package as a library, if you have cloned the repository, run:
-
-```sh
-python3 -m pip install /path/to/repository
-```
-
-else, if you only desire the library, run:
-
-```sh
-pip install git+https://github.com/muse-writes/probLM-solver
 ```
 
 ### Conda
