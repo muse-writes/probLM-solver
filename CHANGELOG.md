@@ -1,3 +1,13 @@
+## v1.5.1 (2026-08-06)
+
+### Feat
+
+- Add GitHub Actions workflow for Python package publishing
+
+### Perf
+
+- Merge pull request #8 from muse-writes/low-level-c-api
+
 ## v1.5.0 (2026-07-08)
 
 ### BREAKING CHANGE
