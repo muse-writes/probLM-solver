@@ -238,7 +238,7 @@ class TestUiSelectModel:
         """ui_select_model() calls SystemExit(1) when the models directory is empty."""
         from problm_solver import cli
 
-        monkeypatch.setattr(cli, 'list_models', lambda: [])
+        monkeypatch.setattr(cli, 'list_models', list)
         with pytest.raises(SystemExit) as exc_info:
             cli.ui_select_model()
         assert exc_info.value.code == 1

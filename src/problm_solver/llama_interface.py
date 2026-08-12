@@ -22,7 +22,7 @@ from problm_solver.data import (
     LLMOutputDataFull,
     LLMTokenData,
 )
-from problm_solver.llama_lowlevel import ModelBackendGeneric, ModelCBackend, ModelLlamaBackend
+from problm_solver.llama_lowlevel import ModelBackendGeneric, ModelCBackend
 from problm_solver.random import RNGLike, resolve_rng
 
 # -- Module-wide setup -- #
@@ -45,7 +45,6 @@ class ModelInstance:
         n_ctx: int = 4096,
         logits_all: bool = False, # noqa: FBT001 FBT002
         n_gpu_layers: int = 0,
-        use_c_api: bool = True, # noqa: FBT001 FBT002
         c_api_copy_logits: bool = True, # noqa: FBT001 FBT002
         *,
         rng: RNGLike = None,
@@ -72,9 +71,8 @@ class ModelInstance:
         :param logits_all: whether or not probability logging is necessary in the Llama instance.
         :param n_gpu_layers: number of GPU layers to pass to Llama. Required for GPU accelerated
             jobs, set to 0 otherwise.
-        :param c_api_copy_logits: When using ``use_c_api=True``, controls whether
-            ``ModelCBackend.last_logits()`` returns a copied array (default) or a
-            zero-copy view of the C logits buffer.
+        :param c_api_copy_logits: Controls whether ``ModelCBackend.last_logits()``
+            returns a copied array (default) or a zero-copy view of the C logits buffer.
         :param rng: Optional random source. May be a ``numpy.random.Generator``,
             integer seed, or ``RandomManager``.
         """
@@ -88,10 +86,7 @@ class ModelInstance:
         self._logits_all = logits_all
         _logger.info('Model %r loaded.', fname)
         self._llm_backend: ModelBackendGeneric
-        if use_c_api:
-            self._llm_backend = ModelCBackend(self._llm, copy_logits=c_api_copy_logits)
-        else:
-            self._llm_backend = ModelLlamaBackend(self._llm)
+        self._llm_backend = ModelCBackend(self._llm, copy_logits=c_api_copy_logits)
 
         # Calculate number of bytes needed in Llama cache.
         metadata = self._llm_backend.metadata()

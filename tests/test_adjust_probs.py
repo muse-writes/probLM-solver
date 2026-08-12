@@ -17,12 +17,11 @@ from problm_solver.adjust_probs import (
     id_logprobs_to_candidate_tokens,
 )
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
-@pytest.fixture()
+@pytest.fixture
 def basic_context() -> GenerationContext:
     """Return a minimal GenerationContext for testing simple adjust functions."""
     return GenerationContext(
@@ -34,14 +33,14 @@ def basic_context() -> GenerationContext:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def context_with_prev(basic_context: GenerationContext) -> GenerationContext:
     """Return a new GenerationContext identical to basic_context but with non-empty prev_probs."""
     from dataclasses import replace
     return replace(basic_context, prev_probs=[0.9, 0.3])
 
 
-@pytest.fixture()
+@pytest.fixture
 def power_dist_context() -> GenerationContext:
     """Return a GenerationContext suitable for SamplePowerDist tests."""
     return GenerationContext(
@@ -125,7 +124,7 @@ class TestSampleLowTempInit:
     """Tests for SampleLowTemp.__init__."""
 
     def test_stores_alpha(self) -> None:
-        """alpha is stored as an instance attribute."""
+        """Alpha is stored as an instance attribute."""
         assert SampleLowTemp(alpha=2).alpha == 2
 
     def test_different_alpha_values_stored(self) -> None:
@@ -150,7 +149,7 @@ class TestSampleLowTempInit:
 class TestSampleLowTempCall:
     """Tests for SampleLowTemp.__call__."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def adj(self) -> SampleLowTemp:
         """Return a SampleLowTemp instance with alpha=2."""
         return SampleLowTemp(alpha=2)
@@ -305,7 +304,7 @@ class TestBranchSampler:
 class TestMetropolisSampler:
     """Tests for MetropolisSampler."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def sampler(self) -> MetropolisSampler:
         """Return a fresh MetropolisSampler."""
         return MetropolisSampler()
@@ -487,7 +486,7 @@ class TestSamplePowerDistInit:
     """Tests for SamplePowerDist.__init__."""
 
     def test_stores_alpha(self) -> None:
-        """alpha is stored correctly."""
+        """Alpha is stored correctly."""
         s = SamplePowerDist(alpha=2.0, lookahead_depth=4,
                             branch_sampler=MetropolisSampler())
         assert s.alpha == 2.0
@@ -523,7 +522,7 @@ class TestSamplePowerDistInit:
 class TestSamplePowerDistCall:
     """Tests for SamplePowerDist.__call__."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def mock_sampler(self) -> MagicMock:
         """Return a mock BranchSampler that accepts proposals and stops after one branch."""
         s = MagicMock(spec=BranchSampler)
@@ -533,7 +532,7 @@ class TestSamplePowerDistCall:
         s.future_logprob.return_value = 0.0
         return s
 
-    @pytest.fixture()
+    @pytest.fixture
     def spd(self, mock_sampler: MagicMock) -> SamplePowerDist:
         """Return a SamplePowerDist(alpha=1, lookahead_depth=2) with mock sampler."""
         return SamplePowerDist(

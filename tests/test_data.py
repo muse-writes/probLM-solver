@@ -15,7 +15,7 @@ from problm_solver.data import (
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def sample_output_data() -> LLMOutputData:
     """Return a small LLMOutputData instance for reuse across tests."""
     return LLMOutputData(
@@ -97,7 +97,7 @@ class TestTokenProbError:
         LLMTokenData(prompt='Q?', tokens=[], probs=[])
 
 
-@pytest.fixture()
+@pytest.fixture
 def sample_token_data() -> LLMTokenData:
     """Return a small LLMTokenData instance for reuse across tests."""
     return LLMTokenData(
@@ -161,7 +161,7 @@ class TestLLMTokenData:
         assert recovered.probs == pytest.approx(sample_token_data.probs)
 
 
-@pytest.fixture()
+@pytest.fixture
 def sample_next_token_data() -> LLMNextTokenData:
     """Return a small LLMNextTokenData instance for reuse across tests."""
     return LLMNextTokenData(
@@ -223,13 +223,13 @@ class TestLLMNextTokenData:
         assert recovered.top_k_tokens == pytest.approx(sample_next_token_data.top_k_tokens)
 
 
-@pytest.fixture()
+@pytest.fixture
 def sample_hyperparams() -> Hyperparams:
     """Return Hyperparams for LLMOutputDataFull tests."""
     return Hyperparams(alpha=0.7, top_k=10, top_p=None, max_tokens=50)
 
 
-@pytest.fixture()
+@pytest.fixture
 def sample_full_data(sample_hyperparams: Hyperparams) -> LLMOutputDataFull:
     """Return an LLMOutputDataFull instance for write/read/roundtrip tests."""
     return LLMOutputDataFull(

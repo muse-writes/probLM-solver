@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from problm_solver.llama_lowlevel import ModelCBackend, ModelLlamaBackend
+from problm_solver.llama_lowlevel import ModelCBackend
 
 
 def _make_llm_mock() -> MagicMock:
@@ -22,9 +22,9 @@ def _make_llm_mock() -> MagicMock:
     return mock_llm
 
 
-@pytest.mark.parametrize('backend_cls', [ModelCBackend, ModelLlamaBackend])
+@pytest.mark.parametrize('backend_cls', [ModelCBackend])
 class TestModelBackends:
-    """Shared delegation tests for both backend adapter implementations."""
+    """Shared delegation tests for the backend adapter implementation."""
 
     def test_n_tokens_property(self, backend_cls) -> None:
         """n_tokens exposes the wrapped model's token count as int."""
