@@ -6,6 +6,8 @@ A Python library enabling researchers to prototype and develop sampling methods 
 
 This library ensures researchers can sample token-by-token, analyse logits, and assess the probability of given outputs.
 
+An R wrapper around this library is available as [`problmsolver`](https://github.com/muse-writes/problmsolver).
+
 This library is currently in active development, and looking for feature requests. Breaking changes will be kept to a minimum, and loudly declared in the changelog where they are unavoidable.
 
 ## Usage
