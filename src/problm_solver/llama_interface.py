@@ -48,6 +48,7 @@ class ModelInstance:
         c_api_copy_logits: bool = True, # noqa: FBT001 FBT002
         *,
         rng: RNGLike = None,
+        raw_completion: bool = False,
     ) -> None:
         """Initialize Llama instance and store context.
 
@@ -75,6 +76,10 @@ class ModelInstance:
             returns a copied array (default) or a zero-copy view of the C logits buffer.
         :param rng: Optional random source. May be a ``numpy.random.Generator``,
             integer seed, or ``RandomManager``.
+        :param raw_completion: When ``True``, bypass the model's chat template and
+            feed ``self.context`` as a raw completion prompt. Required for
+            base/pretrained models, which do not follow chat instructions and must
+            be prompted with plain completion text.
         """
         self._llm = Llama(
             model_path=fname,
@@ -102,6 +107,7 @@ class ModelInstance:
         self._llm.set_cache(self._cache)
         self.context = context
         self._initial_context_length: int = len(self.context)
+        self._raw_completion = raw_completion
 
         # Set up RNG handling.
         self._rng = resolve_rng(rng, stream='global')
@@ -360,16 +366,30 @@ class ModelInstance:
 
 
     def _format_chat_prompt(self) -> list[int]:
-        """Apply the model's chat template to ``self.context`` and return token IDs.
+        """Return the token IDs of the prompt to seed generation with.
 
-        Constructs a :class:`Jinja2ChatFormatter` from the chat template embedded
-        in the model's GGUF metadata, applies it to ``self.context`` as a
-        user-role message, and tokenises the resulting prompt string to a list
-        of integer token IDs. This list is the initial context passed to
-        ``generate_adjusted()``.
+        When :attr:`_raw_completion` is ``False`` (default), the model's chat
+        template is applied to ``self.context`` as a single user-role message via
+        :class:`Jinja2ChatFormatter`, matching the instruct/chat use case.
+
+        When :attr:`_raw_completion` is ``True``, the chat template is bypassed and
+        ``self.context`` is tokenised as plain completion text using the model's
+        ``tokenizer.ggml.add_bos_token`` setting (``add_bos=False`` for Qwen, which
+        does not prepend a BOS). This is the correct prompting path for
+        base/pretrained models, which must be given few-shot completion prompts
+        rather than chat-formatted instructions.
 
         :returns: A tokenized prompt.
         """
+        if self._raw_completion:
+            raw_add_bos = str(self._llm.metadata.get('tokenizer.ggml.add_bos_token', '0')).strip().lower()
+            add_bos = raw_add_bos in ('1', 'true', 'yes', 'on')
+            return self._llm.tokenize(
+                self.context.encode('utf-8'),
+                add_bos=add_bos,
+                special=False,
+            )
+
         chat_template = self._llm.metadata['tokenizer.chat_template']
         eos_token = self._llm.detokenize([self._llm.token_eos()]).decode('utf-8', errors='ignore')
         bos_token = self._llm.detokenize([self._llm.token_bos()]).decode('utf-8', errors='ignore')
