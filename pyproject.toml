@@ -19,6 +19,7 @@ dependencies = [
   "pandas >= 3.0.3",
   "tqdm >= 4.67.3",
   "poethepoet",
+  "ollama",
 ]
 
 [project.scripts]

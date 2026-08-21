@@ -41,3 +41,9 @@ def get_problems(fname: str | None = None) -> list[str]:
     if fname is not None:
         return get_data(fname).iloc[:,0].tolist()
     return get_data().iloc[:, 0].tolist()
+
+#TODO(Clio): Complete this function.
+def grade_problems(fname: str) -> list[bool]:
+    """Grade a JSONL file."""
+    # Placeholder.
+    return [True]
