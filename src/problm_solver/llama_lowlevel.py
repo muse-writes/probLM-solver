@@ -93,7 +93,7 @@ class ModelCBackend(ModelBackendGeneric):
             ``numpy`` copy (default) or a zero-copy view over the C logits buffer.
         """
         self._llm = llm
-        self._n_ctx: int | None = None
+        self._n_ctx: int = self._llm.n_ctx()
         self._stats = BackendStats()
         self._vocab_size: int | None = None
         self._copy_logits = copy_logits
@@ -104,7 +104,7 @@ class ModelCBackend(ModelBackendGeneric):
 # Use the context owned by the high-level Llama wrapper.
         self._ctx = self._get_llama_context_handle()
 
-        self._batch_capacity = 512
+        self._batch_capacity = self._n_ctx
         self._batch = c_api.llama_batch_init(self._batch_capacity, 0, 1)
         self._batch_freed = False
 
@@ -271,8 +271,6 @@ class ModelCBackend(ModelBackendGeneric):
 
     def n_ctx(self) -> int:
         """Get size of context window."""
-        if self._n_ctx is None:
-            self._n_ctx = int(self._llm.n_ctx())
         return self._n_ctx
 
     def save_state(self) -> LlamaState:
