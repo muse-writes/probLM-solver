@@ -5,6 +5,7 @@ this module should only be required for grading custom questions via a neutral L
 dataset already supported by this library, such as MATH500, is handled separately.
 
 This library makes use of simple Ollama cloud compute resources for grading.
+You must bring your own API key and have Ollama installd.
 """
 
 import json
@@ -21,7 +22,18 @@ DEFAULT_SYSTEM_PROMPT = ("You are grading another LLM's answer to a dataset ques
     ' answer to the given question.')
 
 class CloudGrader(Client):
-    """Ollama cloud client configured for grading dataset responses."""
+    """Ollama cloud client configured for grading dataset responses.
+
+    Inherits the ``ollama.Client`` object and extends it. Unlike the default class, it is
+    initialised with a given model, checked against Ollama's list of cloud models. No support
+    currently exists for using a local model as a grader.
+
+    :param model: model string, check `their API tags`_.
+    :param system_prompt: Prompt to govern the cloud model's behaviour. Optional. Default found in
+        ``problm_solver.grader.DEFAULT_SYSTEM_PROMPT``.
+
+    .. _their API tags: https://ollama.com/api/tags
+    """
 
     def __init__(self, model: str, system_prompt: str | None = None) -> None:
         """Initialise."""
@@ -41,7 +53,14 @@ class CloudGrader(Client):
             else DEFAULT_SYSTEM_PROMPT)
 
     def grade(self, question: str, answer: str, response: str) -> tuple[bool,str|None]:
-        """Request a boolean grade for a given answer."""
+        """Request a boolean grade for a given answer.
+
+        :param question: The question being graded.
+        :param answer: The correct answer.
+        :param response: The LLM's attempt at answering the question.
+        :returns: A tuple containing the boolean success/failure state as well as the grader's
+            thinking.
+        """
         response: GenerateResponse = self.generate(
             model=self._model,
             prompt=(f"Question: {question}, Correct Answer: {answer}, Model's Answer: {response}."
