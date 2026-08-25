@@ -86,7 +86,8 @@ class ModelInstance:
             n_ctx=n_ctx,
             logits_all=logits_all,
             verbose=False,
-            n_gpu_layers=n_gpu_layers
+            n_gpu_layers=n_gpu_layers,
+            n_batch=n_ctx #FIXME(Clio): Temporary duct tape fix for crashing backend.
         )
         self._logits_all = logits_all
         _logger.info('Model %r loaded.', fname)
