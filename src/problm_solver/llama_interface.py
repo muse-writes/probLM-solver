@@ -1,11 +1,14 @@
 """llama.cpp python interface for running local models."""
 
+import contextlib
 import copy
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from inspect import isclass
 from typing import Any, cast
+from unittest.mock import patch
 
+import llama_cpp
 import numpy as np
 import numpy.typing as npt
 from llama_cpp import Llama, LlamaRAMCache, LlamaState
@@ -33,6 +36,64 @@ ADEQUATE_TOPK = 30
 ADEQUATE_TOPP = 0.8
 
 
+@contextlib.contextmanager
+def _kv_unified_default_params(*, enabled: bool = True) -> Iterator[None]:
+    """Scoped shim that makes ``llama_context_default_params()`` set ``kv_unified``.
+
+    ``llama-cpp-python``'s :class:`~llama_cpp.Llama` constructor does not
+    expose ``kv_unified``, but multi-sequence batched decoding — used by
+    :meth:`ModelInstance.query_branches_from_live_batch` to generate parallel
+    branch proposals — requires a *unified* KV-cache pool. With the default
+    partitioned pool (``kv_unified=False``) the context is created with
+    ``n_seq_max=1``, so decoding into sequence ids > 0 is rejected with
+    ``llama_decode`` error ``-1`` ("invalid input batch").
+
+    With ``kv_unified=True`` the context uses ``n_ctx_seq = n_ctx`` (sequence 0
+    keeps full capacity, branches share the pool) and the batch validator
+    accepts sequence ids up to ``LLAMA_MAX_SEQ - 1`` (≥ 63), which covers the
+    default ``MetropolisSampler(max_branches=30)``.
+
+    The shim also raises ``n_seq_max`` to :data:`_KV_UNIFIED_N_SEQ_MAX` so that
+    any code path reading ``cparams.n_seq_max`` directly (e.g. output-buffer
+    per-sequence tracking) is sized for parallel branches, and so the value
+    reported by ``llama_n_seq_max()`` distinguishes a shim-configured context
+    (``n_seq_max = _KV_UNIFIED_N_SEQ_MAX``) from a stock one (``n_seq_max = 1``).
+    With ``kv_unified=True`` this does **not** shrink ``n_ctx_seq`` (it stays
+    ``n_ctx``); it must be ``<= LLAMA_MAX_SEQ`` or context creation throws.
+
+    The patch is scoped to the ``Llama()`` construction call only.
+
+    :param enabled: When ``False`` the shim is a no-op (default params are used
+        unchanged), letting callers opt out of multi-sequence support.
+    """
+    if not enabled:
+        yield
+        return
+
+    orig = llama_cpp.llama_context_default_params
+
+    def patched() -> Any:
+        params = orig()
+        params.kv_unified = True
+        params.n_seq_max = _KV_UNIFIED_N_SEQ_MAX
+        return params
+
+    # ``llama.py`` binds the submodule as ``llama_cpp`` (``import llama_cpp.llama_cpp
+    # as llama_cpp``), so ``Llama.__init__`` reads ``llama_context_default_params``
+    # off ``llama_cpp.llama_cpp`` — patching the package-level re-export would not
+    # intercept it. Patch the submodule attribute that ``Llama`` actually uses.
+    with patch.object(llama_cpp.llama_cpp, 'llama_context_default_params', patched):
+        yield
+
+
+# Upper bound on parallel branch sequences the shim configures the context for.
+# Must be <= llama.cpp's compile-time ``LLAMA_MAX_SEQ`` (64 in upstream builds);
+# with ``kv_unified=True`` this does not reduce ``n_ctx_seq``.
+_KV_UNIFIED_N_SEQ_MAX = 64
+
+
+# -- Main model instance -- #
+
 # -- Main model instance -- #
 
 class ModelInstance:
@@ -49,6 +110,7 @@ class ModelInstance:
         *,
         rng: RNGLike = None,
         raw_completion: bool = False,
+        kv_unified: bool = True,
     ) -> None:
         """Initialize Llama instance and store context.
 
@@ -80,15 +142,25 @@ class ModelInstance:
             feed ``self.context`` as a raw completion prompt. Required for
             base/pretrained models, which do not follow chat instructions and must
             be prompted with plain completion text.
+        :param kv_unified: When ``True`` (default), construct the llama.cpp
+            context with a unified KV-cache pool so that multi-sequence batched
+            decoding works — required by
+            :meth:`query_branches_from_live_batch` (and thus the batched
+            proposal path in :class:`~problm_solver.adjust_probs.SamplePowerDist`).
+            With the default partitioned pool the context supports only
+            sequence id 0, so batched branch decoding would fail with
+            ``llama_decode`` error ``-1``. Disable only if you do not use
+            batched branch decoding and want the stock llama.cpp context.
         """
-        self._llm = Llama(
-            model_path=fname,
-            n_ctx=n_ctx,
-            logits_all=logits_all,
-            verbose=False,
-            n_gpu_layers=n_gpu_layers,
-            n_batch=n_ctx #FIXME(Clio): Temporary duct tape fix for crashing backend.
-        )
+        with _kv_unified_default_params(enabled=kv_unified):
+            self._llm = Llama(
+                model_path=fname,
+                n_ctx=n_ctx,
+                logits_all=logits_all,
+                verbose=False,
+                n_gpu_layers=n_gpu_layers,
+                n_batch=n_ctx #FIXME(Clio): Temporary duct tape fix for crashing backend.
+            )
         self._logits_all = logits_all
         _logger.info('Model %r loaded.', fname)
         self._llm_backend: ModelBackendGeneric
@@ -337,6 +409,102 @@ class ModelInstance:
 
         return total_log_prob
 
+    def query_branches_from_live_batch(
+        self,
+        max_tokens: int,
+        n_branches: int,
+        rng: RNGLike = None,
+    ) -> npt.NDArray[np.float64]:
+        """Generate ``n_branches`` independent branches in parallel from live state.
+
+        Unlike :meth:`query_branch_from_live` (which decodes one branch token
+        at a time on a single sequence), this method clones the currently
+        loaded live (sequence-0) KV cache into ``n_branches`` auxiliary
+        sequences and decodes one token per active sequence in a single batched
+        ``llama_decode`` call per depth step. All branches share the same root
+        prefix; they diverge only via independent Gumbel-max samples.
+
+        Branch proposals are drawn from the base model and are independent of
+        any Markov-chain state, so generating them all up front in a batch is
+        statistically identical to generating them one at a time — the caller
+        can feed the returned log-probabilities straight into a sequential
+        Metropolis-Hastings accept/reject loop without changing the target
+        distribution.
+
+        Branches that sample EOS stop accumulating (their partial sum is
+        retained, matching :meth:`query_branch_from_live`'s ``0.0`` for
+        immediate EOS). The live sequence-0 state and its ``n_tokens`` count
+        are left unchanged; all auxiliary branch sequences are torn down on
+        exit via ``kv_cache_seq_keep(0)``.
+
+        :param max_tokens: Maximum number of tokens to generate in each branch.
+        :param n_branches: Number of independent branches to generate in
+            parallel.
+        :param rng: Optional random source override.
+        :returns: ``(n_branches,)`` float64 array of per-branch total
+            log-probabilities.
+        """
+        branch_log_probs = np.zeros(n_branches, dtype=np.float64)
+        if n_branches <= 0:
+            return branch_log_probs
+
+        eos_id = self._llm_backend.token_eos()
+        root_pos = self._llm_backend.n_tokens
+        branch_seq_ids = list(range(1, n_branches + 1))
+
+        # Clone the shared root prefix (seq 0, [0, root_pos)) into each branch
+        # sequence. Seq 0 stays pristine so the live state is recoverable.
+        for dst in branch_seq_ids:
+            self._llm_backend.kv_cache_seq_cp(0, dst, 0, root_pos)
+
+        method_rng = resolve_rng(
+            self._rng if rng is None else rng,
+            stream='llama.query_branches_from_live_batch',
+        )
+
+        active = np.ones(n_branches, dtype=bool)
+        branch_pos = np.full(n_branches, root_pos, dtype=np.int64)
+
+        # First-step logits: the root's already-computed next-token
+        # distribution, shared by every branch. Subsequent steps read
+        # per-branch logits from the batched decode.
+        root_logprobs = self._log_softmax(self._llm_backend.last_logits())
+        current_logprobs = np.tile(root_logprobs, (n_branches, 1))
+
+        try:
+            for step in range(max_tokens):
+                active_idx = np.flatnonzero(active)
+                if active_idx.size == 0:
+                    break
+
+                rows = current_logprobs[active_idx]
+                gumbel = method_rng.gumbel(size=rows.shape)
+                next_ids = np.argmax(rows + gumbel, axis=1).astype(np.int64)
+
+                is_eos = next_ids == eos_id
+                non_eos = ~is_eos
+                sampled_lp = rows[np.arange(rows.shape[0]), next_ids]
+                branch_log_probs[active_idx[non_eos]] += sampled_lp[non_eos]
+                active[active_idx[is_eos]] = False
+
+                decode_local = active_idx[non_eos]
+                if decode_local.size == 0:
+                    break
+                # Final step: no further logits are needed, so skip the decode.
+                if step + 1 >= max_tokens:
+                    break
+
+                token_ids = [int(t) for t in next_ids[non_eos]]
+                seq_ids = [branch_seq_ids[j] for j in decode_local]
+                positions = [int(p) for p in branch_pos[decode_local]]
+                new_logits = self._llm_backend.decode_batch(token_ids, seq_ids, positions)
+                current_logprobs[decode_local] = self._log_softmax_rows(new_logits)
+                branch_pos[decode_local] += 1
+        finally:
+            # Tear down all auxiliary branch sequences; keep the pristine root.
+            self._llm_backend.kv_cache_seq_keep(0)
+
+        return branch_log_probs
 
 ## -- Miscellaneous -- ##
 
@@ -470,6 +638,22 @@ class ModelInstance:
         shifted = x - x.max()
         return shifted - np.log(np.exp(shifted).sum())
 
+    @staticmethod
+    def _log_softmax_rows(logits: npt.NDArray[np.float32]) -> npt.NDArray[np.float64]:
+        """Apply numerically stable row-wise log-softmax to a 2-D logits array.
+
+        Row-wise analogue of :meth:`_log_softmax`, used by the batched branch
+        path to normalise the ``(n_active, n_vocab)`` logits returned by
+        :meth:`ModelCBackend.decode_batch` in one vectorised pass.
+
+        :param logits: ``(n, n_vocab)`` array of raw model logits, one row per
+            active sequence.
+        :returns: ``(n, n_vocab)`` float64 array of row-wise log-probabilities.
+        """
+        x = logits.astype(np.float64)
+        shifted = x - x.max(axis=1, keepdims=True)
+        return shifted - np.log(np.exp(shifted).sum(axis=1, keepdims=True))
+
 
     def _top_k_ids_from_logprobs(
         self,
@@ -601,6 +785,9 @@ class ModelInstance:
                     query_branch_from_live=lambda depth: self.query_branch_from_live(
                         depth,
                         rng=method_rng,
+                    ),
+                    query_branches_from_live_batch=lambda depth, n: self.query_branches_from_live_batch(
+                        depth, n, rng=method_rng,
                     ),
                     base_live_state=pre_adjust_state,
                     query_next_ids_from_live=lambda n: self._top_k_ids_from_logprobs(
@@ -760,6 +947,9 @@ class ModelInstance:
                 query_branch_from_live=lambda depth: self.query_branch_from_live(
                     depth,
                     rng=method_rng,
+                ),
+                query_branches_from_live_batch=lambda depth, n: self.query_branches_from_live_batch(
+                    depth, n, rng=method_rng,
                 ),
                 base_live_state=pre_adjust_state,
                 query_next_ids_from_live=lambda n: self._top_k_ids_from_logprobs(

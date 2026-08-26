@@ -39,6 +39,11 @@ class GenerationContext:
     :param query_branch_from_live: Generates a complete branch of up to
         ``depth`` tokens from the model's currently loaded live state and
         returns the sum of per-token log-probabilities. Optional.
+    :param query_branches_from_live_batch: Generates ``n_branches`` independent
+        branches of up to ``depth`` tokens in a single batched pass from the
+        live state, returning an ``(n_branches,)`` array of per-branch total
+        log-probabilities. Optional; when present, :class:`SamplePowerDist`
+        uses it to vectorise proposal generation.
     """
 
     token_id_probs: CandidateTokens
@@ -52,6 +57,7 @@ class GenerationContext:
     save_live_state: Callable[[], Any] | None = None
     load_live_state: Callable[[Any], None] | None = None
     eval_tokens: Callable[[list[int]], None] | None = None
+    query_branches_from_live_batch: Callable[[int, int], npt.NDArray[np.float64]] | None = None
 
 
 # Callable that receives a GenerationContext and returns adjusted
@@ -167,6 +173,17 @@ class BranchSampler(ABC):
 
     supports_token_beam = False
 
+    @property
+    def max_proposals(self) -> int:
+        """Max branch proposals a batched path should generate upfront.
+
+        Returns ``0`` by default to signal that this sampler does not support
+        batched (vectorised) proposal generation. Samplers that do (e.g.
+        :class:`MetropolisSampler`) override this so :class:`SamplePowerDist`
+        knows how many proposals to request in a single batched call.
+        """
+        return 0
+
     def reset(self) -> None: # noqa: B027
         """Reset internal state at the start of each candidate-token chain.
 
@@ -244,6 +261,11 @@ class MetropolisSampler(BranchSampler):
         self._max_branches = max_branches
         self._tolerance = tolerance
         self._rng = resolve_rng(rng, stream='adjust.metropolis')
+
+    @property
+    def max_proposals(self) -> int:
+        """Number of proposals to generate in one batched pass (= max_branches)."""
+        return self._max_branches
 
     def reset(self) -> None:
         """Clear chain state before starting a new candidate-token chain."""
@@ -459,6 +481,32 @@ class SamplePowerDist:
         self.lookahead_depth = lookahead_depth
         self.branch_sampler = branch_sampler
 
+    def _run_mh_chain(self, proposals: npt.NDArray[np.float64]) -> np.float64:
+        """Run the MH accept/reject loop over a batch of branch log-probabilities.
+
+        Resets the branch sampler, feeds each proposal through :meth:`step`,
+        stops when :meth:`should_continue` returns ``False``, and returns the
+        converged weighting via :meth:`future_logprob`. Shared between the
+        batched and sequential proposal paths so both produce identical
+        chain output for identical proposals.
+
+        :param proposals: 1-D array of branch log-probabilities.
+        :returns: The sampler's ``future_logprob`` weighting for the chain.
+        """
+        self.branch_sampler.reset()
+        accepted: list[float] = []
+        for proposed in proposals:
+            accepted.append(self.branch_sampler.step(
+                proposed_log_prob=float(proposed), alpha=self.alpha,
+            ))
+            if not self.branch_sampler.should_continue(
+                np.array(accepted, dtype=np.float64)
+            ):
+                break
+        return self.branch_sampler.future_logprob(
+            self.alpha, np.array(accepted, dtype=np.float64)
+        )
+
     def __call__(self, context: GenerationContext) -> CandidateTokens:
         """Apply power-distribution adjustment using lookahead branch sampling.
 
@@ -496,6 +544,14 @@ class SamplePowerDist:
                     eval_tokens=eval_tokens,
                 )
         else:
+            has_batched_branch = (
+                context.query_branches_from_live_batch is not None
+                and context.base_live_state is not None
+                and context.save_live_state is not None
+                and context.load_live_state is not None
+                and context.eval_tokens is not None
+                and self.branch_sampler.max_proposals > 0
+            )
             has_live_branch = (
                 context.query_branch_from_live is not None
                 and context.base_live_state is not None
@@ -504,7 +560,25 @@ class SamplePowerDist:
                 and context.eval_tokens is not None
             )
 
-            if has_live_branch:
+            if has_batched_branch:
+                base_live_state = context.base_live_state
+                query_branches_from_live_batch = context.query_branches_from_live_batch
+                load_live_state = context.load_live_state
+                eval_tokens = context.eval_tokens
+                n_proposals = self.branch_sampler.max_proposals
+
+                def score_future_from_candidate_id(candidate_id: int) -> np.float64:
+                    # Position the live state at the candidate root on seq 0.
+                    load_live_state(base_live_state)
+                    eval_tokens([candidate_id])
+                    # Generate all proposals in one batched pass; proposals are
+                    # base-model draws, independent of chain state, so batching
+                    # does not change the MH target distribution.
+                    proposals = query_branches_from_live_batch(
+                        self.lookahead_depth, n_proposals
+                    )
+                    return self._run_mh_chain(proposals)
+            elif has_live_branch:
                 base_live_state = context.base_live_state
                 query_branch_from_live = context.query_branch_from_live
                 save_live_state = context.save_live_state
