@@ -176,16 +176,21 @@ class TestSampleLowTempCall:
         """With no previous tokens, output log-probs are finite for non-zero probs."""
         assert np.all(np.isfinite(adj(basic_context).candidate_logprobs))
 
-    def test_with_prev_probs_changes_output(
+    def test_prev_probs_does_not_change_output(
         self,
         adj: SampleLowTemp,
         basic_context: GenerationContext,
         context_with_prev: GenerationContext,
     ) -> None:
-        """Providing non-empty prev_probs produces a different result."""
+        """The selection history (prev_probs) does not affect the output.
+
+        The history term is a constant across candidates and is intentionally
+        not folded into the adjusted log-probabilities, so the output depends
+        only on the current token distribution and ``alpha``.
+        """
         out_a = adj(basic_context)
         out_b = adj(context_with_prev)
-        assert not np.allclose(out_a.candidate_logprobs, out_b.candidate_logprobs)
+        assert np.allclose(out_a.candidate_logprobs, out_b.candidate_logprobs)
 
     def test_relative_order_preserved_with_empty_prev_probs(
         self, adj: SampleLowTemp
@@ -239,18 +244,35 @@ class TestSampleLowTempCall:
         out = SampleLowTemp(alpha=2.0)(ctx)
         assert out.candidate_logprobs.tolist() == pytest.approx([0.0, -2.0])
 
-    def test_matches_exact_power_scaling_with_history_factor(self) -> None:
-        """History contributes a constant log(prod(prev_probs ** alpha)) shift."""
-        ctx = GenerationContext(
+    def test_history_does_not_shift_output(self) -> None:
+        """The selection history contributes no constant shift to the output.
+
+        Previously ``alpha * sum(log(prev_probs))`` was added to every
+        candidate; that term is shift-invariant under sampling and only
+        polluted stored top-k log-probabilities, so it is no longer applied.
+        The output must therefore equal the pure per-step power scaling
+        regardless of ``prev_probs``.
+        """
+        ctx_empty = GenerationContext(
             token_id_probs=id_logprobs_to_candidate_tokens({1: -0.2, 2: -1.2}),
-            prev_probs=[0.5],
+            prev_probs=[],
             context_tokens=[],
             query_next_id=MagicMock(),
             query_branch=MagicMock(),
         )
-        out = SampleLowTemp(alpha=2.0)(ctx)
-        expected_shift = float(np.log(0.5 ** 2))
-        assert out.candidate_logprobs.tolist() == pytest.approx([expected_shift, expected_shift - 2.0])
+        ctx_with_prev = GenerationContext(
+            token_id_probs=id_logprobs_to_candidate_tokens({1: -0.2, 2: -1.2}),
+            prev_probs=[0.5, 0.25],
+            context_tokens=[],
+            query_next_id=MagicMock(),
+            query_branch=MagicMock(),
+        )
+        out_empty = SampleLowTemp(alpha=2.0)(ctx_empty)
+        out_with_prev = SampleLowTemp(alpha=2.0)(ctx_with_prev)
+        # Pure per-step power scaling: alpha * (lp - lp.max()) == [0.0, -2.0].
+        assert out_empty.candidate_logprobs.tolist() == pytest.approx([0.0, -2.0])
+        assert out_with_prev.candidate_logprobs.tolist() == pytest.approx([0.0, -2.0])
+        assert np.allclose(out_empty.candidate_logprobs, out_with_prev.candidate_logprobs)
 
     def test_stateful_rolling_matches_full_recompute(self) -> None:
         """Stateful rolling history matches fresh full recomputation across steps."""

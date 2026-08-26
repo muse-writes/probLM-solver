@@ -97,12 +97,26 @@ def adjust_identity(context: GenerationContext) -> CandidateTokens:
 
 
 class SampleLowTemp:
-    """Adjust token log-probabilities by power-scaling with selection history.
+    """Adjust token log-probabilities by per-step power-scaling (low-temperature sampling).
 
-    At each generation step, the current token probabilities are raised to
-    ``alpha`` and multiplied by the product of all previously selected token
-    probabilities each also raised to ``alpha``. The result is returned as
-    log-probabilities for downstream renormalisation and sampling.
+    At each generation step the current token log-probabilities are multiplied
+    by ``alpha`` (equivalently, the probabilities are raised to ``alpha``),
+    which sharpens the distribution for ``alpha > 1`` and flattens it for
+    ``0 < alpha < 1``. The result is returned as log-probabilities for
+    downstream renormalisation and sampling.
+
+    The selection history (``prev_probs``) is deliberately *not* folded into
+    the output. An earlier version added ``alpha * sum(log(prev_probs))`` to
+    every candidate's log-probability, modelling a joint-sequence probability.
+    Because that term is identical across candidates at a given step, it is
+    shift-invariant under the softmax used for sampling and therefore has no
+    effect on which token is selected or on the stored per-token
+    probabilities. Its only observable effect was to inject a steadily growing
+    negative offset into the top-k log-probability map stored in
+    ``LLMOutputDataFull.response_topk`` (drifting to ~``-alpha * n * mean_logprob``
+    by the end of a long generation). Omitting it keeps the stored log-probabilities
+    on a stable, interpretable scale without altering the sampling rigidity,
+    which is governed solely by the per-step ``alpha * lp`` scaling.
 
     :param alpha: Scaling exponent. Values greater than 1 sharpen the
         distribution (favoring already-likely tokens); values between 0
@@ -117,46 +131,18 @@ class SampleLowTemp:
     def __init__(self, alpha: float) -> None:
         """Initialize with scaling exponent.
 
-        :param alpha: Exponent applied to current and previous token
-            probabilities when computing the adjustment.
+        :param alpha: Exponent applied to the current token probabilities
+            when computing the adjustment.
         """
         self.alpha = alpha
-        self._prev_len = 0
-        self._prev_logprob_sum = 0.0
-
-    def reset(self) -> None:
-        """Reset rolling history state for a new generation."""
-        self._prev_len = 0
-        self._prev_logprob_sum = 0.0
-
-    def _history_log_shift(self, prev_probs: list[float]) -> float:
-        """Return rolling ``alpha * sum(log(prev_probs))`` for history scaling."""
-        cur_len = len(prev_probs)
-        if cur_len == 0:
-            self.reset()
-            return 0.0
-
-        if cur_len < self._prev_len:
-            self._prev_logprob_sum = float(np.sum(np.log(np.array(prev_probs, dtype=float))))
-        elif cur_len == self._prev_len + 1:
-            self._prev_logprob_sum += float(np.log(prev_probs[-1]))
-        elif cur_len == self._prev_len:
-            self._prev_logprob_sum = float(np.sum(np.log(np.array(prev_probs, dtype=float))))
-        else:
-            self._prev_logprob_sum = float(np.sum(np.log(np.array(prev_probs, dtype=float))))
-
-        self._prev_len = cur_len
-        return self.alpha * self._prev_logprob_sum
 
     def __call__(self, context: GenerationContext) -> CandidateTokens:
-        """Apply power-scaling adjustment to the current token-ID distribution."""
+        """Apply per-step power-scaling adjustment to the current token-ID distribution."""
         candidate_ids = context.token_id_probs.candidate_ids
         lp = context.token_id_probs.candidate_logprobs.astype(np.float64, copy=True)
         lp -= lp.max()
 
-        prev_probs = context.prev_probs if context.prev_probs is not None else []
-        history_log_shift = self._history_log_shift(prev_probs)
-        new_logprobs: npt.NDArray[np.float64] = self.alpha * lp + history_log_shift
+        new_logprobs: npt.NDArray[np.float64] = self.alpha * lp
         return CandidateTokens(
             candidate_ids=candidate_ids.astype(np.int32, copy=False),
             candidate_logprobs=new_logprobs,
