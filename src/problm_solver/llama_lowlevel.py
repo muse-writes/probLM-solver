@@ -328,6 +328,11 @@ class ModelCBackend(ModelBackendGeneric):
             )
             raise ValueError(msg)
 
+        # Will be unable to read disontiguous logits if not present.
+        if not hasattr(c_api, 'llama_get_logits_ith'):
+            msg = 'Batched decoding requires llama_get_logits_ith() to access per-token logits.'
+            raise RuntimeError(msg)
+
         self._batch.n_tokens = n_active
         for ii in range(n_active):
             self._batch.token[ii] = int(token_ids[ii])
@@ -382,15 +387,18 @@ class ModelCBackend(ModelBackendGeneric):
         """
         vocab = self._resolve_vocab_size()
         try:
-            logits_ptr = c_api.llama_get_logits(self._ctx)
-            logits_view = np.ctypeslib.as_array(logits_ptr, shape=(n_active, vocab))
-            return logits_view.astype(np.float32, copy=self._copy_logits)
+            rows = np.empty((n_active, vocab), dtype=np.float32)
+            for ii in range(n_active):
+                row_ptr = c_api.llama_get_logits_ith(self._ctx, ii)
+                rows[ii] = np.ctypeslib.as_array(row_ptr, shape=(vocab,))
         except (TypeError, ValueError, ctypes.ArgumentError):
             if type(self._llm).__module__.startswith('unittest.mock'):
                 pos = np.asarray(positions, dtype=np.intp)
                 return np.array(self._llm.scores[pos], dtype=np.float32, copy=True)
             msg = 'Unable to access batch logits via llama_get_logits().'
             raise RuntimeError(msg) from None
+        else:
+            return rows
 
     def _log_decode_batch_failure(
         self,
