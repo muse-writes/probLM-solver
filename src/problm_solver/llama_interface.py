@@ -447,6 +447,9 @@ class ModelInstance:
         branch_log_probs = np.zeros(n_branches, dtype=np.float64)
         if n_branches <= 0:
             return branch_log_probs
+        if n_branches >= _KV_UNIFIED_N_SEQ_MAX:
+            msg = f'Branches must be <= n_seq ({_KV_UNIFIED_N_SEQ_MAX - 1}, got {n_branches}'
+            raise ValueError(msg)
 
         eos_id = self._llm_backend.token_eos()
         root_pos = self._llm_backend.n_tokens
