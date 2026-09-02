@@ -1,3 +1,27 @@
+## v1.6.0 (2026-09-02)
+
+### BREAKING CHANGE
+
+- `use_c_api` parameter no longer exists in
+`ModelInstance`.
+
+### Feat
+
+- Exploit llama.cpp batch decoding for parallelism in MCMC
+- **grader**: Initial cloud grading utilities added.
+- **llama**: Added `raw_completion` option, for base models.
+
+### Fix
+
+- **llama**: Serialized model loading to prevent missed shim.
+- Halts gracefully when n_seq is exceeded during batch decode.
+- **llama**: batch decode can now read discontiguous llama logits
+- Low temperature sampling no longer accumulates history in LP
+- **README**: Typo in dependency installation instructions for clusters
+- **llama**: Fixed batch capacity to `n_ctx` at model init.
+- **llama**: Fixed batch capacity to `n_ctx` to reduce error scope.
+- Removed redundant high level backend in `llama_lowlevel`.
+
 ## v1.5.1 (2026-08-06)
 
 ### Feat
