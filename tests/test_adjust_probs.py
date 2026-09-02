@@ -176,16 +176,21 @@ class TestSampleLowTempCall:
         """With no previous tokens, output log-probs are finite for non-zero probs."""
         assert np.all(np.isfinite(adj(basic_context).candidate_logprobs))
 
-    def test_with_prev_probs_changes_output(
+    def test_prev_probs_does_not_change_output(
         self,
         adj: SampleLowTemp,
         basic_context: GenerationContext,
         context_with_prev: GenerationContext,
     ) -> None:
-        """Providing non-empty prev_probs produces a different result."""
+        """The selection history (prev_probs) does not affect the output.
+
+        The history term is a constant across candidates and is intentionally
+        not folded into the adjusted log-probabilities, so the output depends
+        only on the current token distribution and ``alpha``.
+        """
         out_a = adj(basic_context)
         out_b = adj(context_with_prev)
-        assert not np.allclose(out_a.candidate_logprobs, out_b.candidate_logprobs)
+        assert np.allclose(out_a.candidate_logprobs, out_b.candidate_logprobs)
 
     def test_relative_order_preserved_with_empty_prev_probs(
         self, adj: SampleLowTemp
@@ -239,18 +244,35 @@ class TestSampleLowTempCall:
         out = SampleLowTemp(alpha=2.0)(ctx)
         assert out.candidate_logprobs.tolist() == pytest.approx([0.0, -2.0])
 
-    def test_matches_exact_power_scaling_with_history_factor(self) -> None:
-        """History contributes a constant log(prod(prev_probs ** alpha)) shift."""
-        ctx = GenerationContext(
+    def test_history_does_not_shift_output(self) -> None:
+        """The selection history contributes no constant shift to the output.
+
+        Previously ``alpha * sum(log(prev_probs))`` was added to every
+        candidate; that term is shift-invariant under sampling and only
+        polluted stored top-k log-probabilities, so it is no longer applied.
+        The output must therefore equal the pure per-step power scaling
+        regardless of ``prev_probs``.
+        """
+        ctx_empty = GenerationContext(
             token_id_probs=id_logprobs_to_candidate_tokens({1: -0.2, 2: -1.2}),
-            prev_probs=[0.5],
+            prev_probs=[],
             context_tokens=[],
             query_next_id=MagicMock(),
             query_branch=MagicMock(),
         )
-        out = SampleLowTemp(alpha=2.0)(ctx)
-        expected_shift = float(np.log(0.5 ** 2))
-        assert out.candidate_logprobs.tolist() == pytest.approx([expected_shift, expected_shift - 2.0])
+        ctx_with_prev = GenerationContext(
+            token_id_probs=id_logprobs_to_candidate_tokens({1: -0.2, 2: -1.2}),
+            prev_probs=[0.5, 0.25],
+            context_tokens=[],
+            query_next_id=MagicMock(),
+            query_branch=MagicMock(),
+        )
+        out_empty = SampleLowTemp(alpha=2.0)(ctx_empty)
+        out_with_prev = SampleLowTemp(alpha=2.0)(ctx_with_prev)
+        # Pure per-step power scaling: alpha * (lp - lp.max()) == [0.0, -2.0].
+        assert out_empty.candidate_logprobs.tolist() == pytest.approx([0.0, -2.0])
+        assert out_with_prev.candidate_logprobs.tolist() == pytest.approx([0.0, -2.0])
+        assert np.allclose(out_empty.candidate_logprobs, out_with_prev.candidate_logprobs)
 
     def test_stateful_rolling_matches_full_recompute(self) -> None:
         """Stateful rolling history matches fresh full recomputation across steps."""
@@ -707,6 +729,207 @@ class TestSamplePowerDistCall:
         assert query_branch.call_count == 0
         assert set(result.candidate_ids.tolist()) == {99, 100}
         assert result.candidate_logprobs.dtype == np.float64
+
+
+class TestSamplePowerDistBatchedCall:
+    """Tests for the batched-proposal path in SamplePowerDist.__call__.
+
+    When ``GenerationContext.query_branches_from_live_batch`` is available,
+    SamplePowerDist generates all ``max_proposals`` branch proposals in one
+    batched call and feeds them through the same Metropolis-Hastings
+    accept/reject loop as the sequential path. The target distribution is
+    unchanged because proposals are drawn from the base model independently of
+    chain state.
+    """
+
+    _ALPHA = 2.0
+    _DEPTH = 3
+    _MAX_BRANCHES = 4
+
+    def _live_callables(self):
+        """Return (load, save, eval) callables that simulate live-state ops."""
+        state: dict[str, object] = {'root': ()}
+
+        def load_state(s):
+            state['root'] = s
+
+        def save_state():
+            return state['root']
+
+        def eval_tokens(ids: list[int]) -> None:
+            return None
+
+        return load_state, save_state, eval_tokens
+
+    def _batched_ctx(
+        self,
+        proposals: np.ndarray,
+        *,
+        token_id_probs: dict[int, float] | None = None,
+        branch_sampler=None,
+    ) -> GenerationContext:
+        """Build a GenerationContext wired for the batched path."""
+        load_state, save_state, eval_tokens = self._live_callables()
+        if token_id_probs is None:
+            token_id_probs = {99: -0.5, 100: -1.2}
+        return GenerationContext(
+            token_id_probs=id_logprobs_to_candidate_tokens(token_id_probs),
+            prev_probs=[],
+            context_tokens=[1, 2],
+            query_next_id=MagicMock(),
+            query_branch=MagicMock(),  # must NOT be called on the batched path
+            query_branch_from_live=MagicMock(),
+            query_branches_from_live_batch=MagicMock(return_value=proposals),
+            base_live_state=(),
+            save_live_state=save_state,
+            load_live_state=load_state,
+            eval_tokens=eval_tokens,
+            query_next_ids_from_live=MagicMock(),
+        )
+
+    def test_uses_batched_query_and_skips_sequential(self) -> None:
+        """When batched callable is set, query_branches_from_live_batch is used and query_branch is not."""
+        sampler = MetropolisSampler(equil_branches=1, max_branches=self._MAX_BRANCHES)
+        proposals = np.array([-1.0] * self._MAX_BRANCHES, dtype=np.float64)
+        ctx = self._batched_ctx(proposals, branch_sampler=sampler)
+        spd = SamplePowerDist(
+            alpha=self._ALPHA, lookahead_depth=self._DEPTH, branch_sampler=sampler
+        )
+        spd(ctx)
+        assert ctx.query_branches_from_live_batch.call_count == 2
+        for c in ctx.query_branches_from_live_batch.call_args_list:
+            assert c.args == (self._DEPTH, self._MAX_BRANCHES)
+        ctx.query_branch.assert_not_called()
+        ctx.query_branch_from_live.assert_not_called()
+
+    def test_batched_proposals_feed_mh_step_in_order(self) -> None:
+        """Each batched proposal is passed to step() in array order."""
+        mock_sampler = MagicMock(spec=BranchSampler)
+        mock_sampler.supports_token_beam = False
+        mock_sampler.max_proposals = self._MAX_BRANCHES
+        mock_sampler.step.side_effect = lambda proposed_log_prob, **_: proposed_log_prob
+        # Consume all proposals: continue N-1 times, then stop on the Nth check.
+        mock_sampler.should_continue.side_effect = [True, True, True, False]
+        mock_sampler.future_logprob.return_value = 0.0
+
+        proposals = np.array([-0.1, -0.2, -0.3, -0.4], dtype=np.float64)
+        ctx = self._batched_ctx(
+            proposals, token_id_probs={99: -0.5}, branch_sampler=mock_sampler
+        )
+        spd = SamplePowerDist(
+            alpha=self._ALPHA, lookahead_depth=self._DEPTH, branch_sampler=mock_sampler
+        )
+        spd(ctx)
+        proposed_args = [c.kwargs.get('proposed_log_prob', c.args[0] if c.args else None)
+                         for c in mock_sampler.step.call_args_list]
+        assert proposed_args == [-0.1, -0.2, -0.3, -0.4]
+
+    def test_batched_matches_sequential_under_identical_proposals(self) -> None:
+        """Batched and sequential paths give equal adjusted logprobs for the same proposals."""
+        # All proposals equal → MH always accepts → chain = [v]*N regardless of rng.
+        v = -1.0
+        proposals = np.array([v] * self._MAX_BRANCHES, dtype=np.float64)
+
+        sampler_seq = MetropolisSampler(equil_branches=1, max_branches=self._MAX_BRANCHES, rng=7)
+        sampler_bat = MetropolisSampler(equil_branches=1, max_branches=self._MAX_BRANCHES, rng=7)
+
+        load_state, save_state, eval_tokens = self._live_callables()
+        ctx_batched = GenerationContext(
+            token_id_probs=id_logprobs_to_candidate_tokens({99: -0.5}),
+            prev_probs=[],
+            context_tokens=[1],
+            query_next_id=MagicMock(),
+            query_branch=MagicMock(),
+            query_branch_from_live=MagicMock(),
+            query_branches_from_live_batch=MagicMock(return_value=proposals),
+            base_live_state=(),
+            save_live_state=save_state,
+            load_live_state=load_state,
+            eval_tokens=eval_tokens,
+            query_next_ids_from_live=MagicMock(),
+        )
+        ctx_sequential = GenerationContext(
+            token_id_probs=id_logprobs_to_candidate_tokens({99: -0.5}),
+            prev_probs=[],
+            context_tokens=[1],
+            query_next_id=MagicMock(),
+            query_branch=MagicMock(),
+            query_branch_from_live=MagicMock(return_value=v),  # same proposal each call
+            query_branches_from_live_batch=None,  # force sequential fallback
+            base_live_state=(),
+            save_live_state=save_state,
+            load_live_state=load_state,
+            eval_tokens=eval_tokens,
+            query_next_ids_from_live=MagicMock(),
+        )
+
+        spd_bat = SamplePowerDist(
+            alpha=self._ALPHA, lookahead_depth=self._DEPTH, branch_sampler=sampler_bat
+        )
+        spd_seq = SamplePowerDist(
+            alpha=self._ALPHA, lookahead_depth=self._DEPTH, branch_sampler=sampler_seq
+        )
+        out_bat = spd_bat(ctx_batched)
+        out_seq = spd_seq(ctx_sequential)
+        assert np.allclose(out_bat.candidate_logprobs, out_seq.candidate_logprobs)
+
+    def test_falls_back_to_sequential_when_batched_callable_missing(self) -> None:
+        """Without query_branches_from_live_batch, the sequential query_branch path is used."""
+        mock_sampler = MagicMock(spec=BranchSampler)
+        mock_sampler.supports_token_beam = False
+        mock_sampler.step.side_effect = lambda proposed_log_prob, **_: proposed_log_prob
+        mock_sampler.should_continue.return_value = False
+        mock_sampler.future_logprob.return_value = 0.0
+        ctx = GenerationContext(
+            token_id_probs=id_logprobs_to_candidate_tokens({99: -0.5}),
+            prev_probs=[],
+            context_tokens=[1],
+            query_next_id=MagicMock(),
+            query_branch=MagicMock(return_value=-2.0),
+        )
+        spd = SamplePowerDist(
+            alpha=self._ALPHA, lookahead_depth=self._DEPTH, branch_sampler=mock_sampler
+        )
+        spd(ctx)
+        ctx.query_branch.assert_called_once()
+
+    def test_falls_back_to_sequential_when_live_state_missing(self) -> None:
+        """Batched callable present but no live-state callables → sequential fallback."""
+        mock_sampler = MagicMock(spec=BranchSampler)
+        mock_sampler.supports_token_beam = False
+        mock_sampler.step.side_effect = lambda proposed_log_prob, **_: proposed_log_prob
+        mock_sampler.should_continue.return_value = False
+        mock_sampler.future_logprob.return_value = 0.0
+        ctx = GenerationContext(
+            token_id_probs=id_logprobs_to_candidate_tokens({99: -0.5}),
+            prev_probs=[],
+            context_tokens=[1],
+            query_next_id=MagicMock(),
+            query_branch=MagicMock(return_value=-2.0),
+            query_branches_from_live_batch=MagicMock(return_value=np.zeros(4)),
+            # live-state callables absent
+        )
+        spd = SamplePowerDist(
+            alpha=self._ALPHA, lookahead_depth=self._DEPTH, branch_sampler=mock_sampler
+        )
+        spd(ctx)
+        ctx.query_branches_from_live_batch.assert_not_called()
+        ctx.query_branch.assert_called_once()
+
+    def test_reset_called_once_per_candidate_on_batched_path(self) -> None:
+        """branch_sampler.reset() is called once per candidate token (batched path)."""
+        sampler = MetropolisSampler(equil_branches=1, max_branches=self._MAX_BRANCHES, rng=7)
+        proposals = np.array([-1.0] * self._MAX_BRANCHES, dtype=np.float64)
+        ctx = self._batched_ctx(
+            proposals, token_id_probs={99: -0.5, 100: -1.2}, branch_sampler=sampler
+        )
+        sampler_reset = MagicMock(wraps=sampler.reset)
+        sampler.reset = sampler_reset
+        spd = SamplePowerDist(
+            alpha=self._ALPHA, lookahead_depth=self._DEPTH, branch_sampler=sampler
+        )
+        spd(ctx)
+        assert sampler_reset.call_count == 2
 
 
 # ---------------------------------------------------------------------------

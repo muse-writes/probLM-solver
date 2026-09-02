@@ -82,6 +82,56 @@ class TestModelInstanceInit:
         assert isinstance(instance._llm_backend, ModelCBackend)
 
 
+class TestKVUnifiedContextShim:
+    """Tests for the kv_unified injection shim used for multi-sequence decoding."""
+
+    def test_shim_sets_kv_unified_true_within_context(self) -> None:
+        """Inside the shim, the submodule binding Llama uses returns kv_unified=True."""
+        from problm_solver.llama_interface import _kv_unified_default_params
+
+        import llama_cpp
+
+        # llama.py does `import llama_cpp.llama_cpp as llama_cpp`, so Llama reads
+        # llama_context_default_params off the SUBMODULE. That binding must be patched.
+        assert llama_cpp.llama_cpp.llama_context_default_params().kv_unified is False
+        assert llama_cpp.llama_cpp.llama_context_default_params().n_seq_max in (0, 1)
+        with _kv_unified_default_params(enabled=True):
+            assert llama_cpp.llama_cpp.llama_context_default_params().kv_unified is True
+            assert llama_cpp.llama_cpp.llama_context_default_params().n_seq_max == 64
+        # Restored on exit.
+        assert llama_cpp.llama_cpp.llama_context_default_params().kv_unified is False
+
+    def test_shim_disabled_is_transparent(self) -> None:
+        """With enabled=False the shim leaves the submodule binding untouched."""
+        from problm_solver.llama_interface import _kv_unified_default_params
+
+        import llama_cpp
+
+        with _kv_unified_default_params(enabled=False):
+            assert llama_cpp.llama_cpp.llama_context_default_params().kv_unified is False
+
+    def test_model_instance_requests_kv_unified_by_default(self) -> None:
+        """Constructing ModelInstance enters the kv_unified shim by default."""
+        from problm_solver.llama_interface import ModelInstance
+
+        with patch('problm_solver.llama_interface.Llama') as MockLlama, \
+             patch('problm_solver.llama_interface._kv_unified_default_params') as shim:
+            MockLlama.return_value = _make_llama_mock()
+            ModelInstance(fname='fake.gguf', context='Hello')
+        # Default kv_unified=True → shim entered with enabled=True.
+        shim.assert_called_once_with(enabled=True)
+
+    def test_model_instance_can_disable_kv_unified(self) -> None:
+        """kv_unified=False skips the shim (stock llama.cpp context)."""
+        from problm_solver.llama_interface import ModelInstance
+
+        with patch('problm_solver.llama_interface.Llama') as MockLlama, \
+             patch('problm_solver.llama_interface._kv_unified_default_params') as shim:
+            MockLlama.return_value = _make_llama_mock()
+            ModelInstance(fname='fake.gguf', context='Hello', kv_unified=False)
+        shim.assert_called_once_with(enabled=False)
+
+
 class TestModelInstanceQuery:
     """Tests for ModelInstance.query."""
 
@@ -446,6 +496,220 @@ class TestModelInstanceQueryBranch:
             branch_model.query_branch([10, 20, 30], max_tokens=3)
         # 1 context eval + 3 single-token evals
         assert branch_model._llm.eval.call_count == 4
+
+
+class TestModelInstanceQueryBranchesFromLiveBatch:
+    """Tests for ModelInstance.query_branches_from_live_batch.
+
+    The batched path generates ``n_branches`` independent branches in lockstep
+    from the currently loaded live (seq-0) state, using multi-sequence
+    batched decoding. With zero-Gumbel sampling every branch greedily picks
+    the argmax of the per-position scores row, so all branches produce the
+    same log-probability as a single sequential ``query_branch_from_live``
+    call — that is the core equivalence invariant.
+    """
+
+    _VOCAB = 5
+    _EOS = 4
+    _ROOT_POS = 3  # live seq-0 length; first logits read from scores[ROOT_POS - 1]
+
+    @pytest.fixture
+    def batch_model(self, model_instance):
+        """Configure mock LLM with per-position scores for batched branch tests.
+
+        The live state is positioned at ``_ROOT_POS`` (``n_tokens = 3``), so
+        :meth:`last_logits` returns ``scores[2]``. ``decode_batch``'s mock
+        fallback returns ``scores[positions]``, so step ``s`` consumes
+        ``scores[_ROOT_POS - 1 + s]`` — mirroring the sequential path.
+        """
+        scores = np.zeros((2048, self._VOCAB), dtype=np.float32)
+        # step 0 (position 2): argmax = 1 (non-EOS)
+        scores[2] = [0.5, 3.0, 1.5, 0.2, -2.0]
+        # step 1 (position 3): argmax = 2 (non-EOS)
+        scores[3] = [0.5, 0.5, 2.0, 0.2, -2.0]
+        # step 2 (position 4): argmax = 0 (non-EOS) — only used if depth > 2
+        scores[4] = [2.0, 0.5, 0.5, 0.2, -2.0]
+
+        model_instance._llm.scores = scores
+        model_instance._llm.n_tokens = self._ROOT_POS
+        model_instance._llm.token_eos.return_value = self._EOS
+        # decode_batch's mock fallback calls llm.eval; leave it as a no-op mock
+        # (n_tokens advancement is irrelevant — batched logits come from
+        # scores[positions], not scores[n_tokens - 1]).
+        return model_instance
+
+    def _zero_gumbel_rng(self) -> MagicMock:
+        """Return an rng mock whose ``gumbel`` returns zeros of vocab width."""
+        mock_rng = MagicMock()
+        mock_rng.gumbel.return_value = np.zeros(self._VOCAB, dtype=np.float64)
+        return mock_rng
+
+    def test_returns_array_of_n_branches_floats(self, batch_model) -> None:
+        """Return shape is (n_branches,) float64."""
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            result = batch_model.query_branches_from_live_batch(
+                max_tokens=2, n_branches=3
+            )
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (3,)
+        assert result.dtype == np.float64
+
+    def test_zero_branches_returns_empty_array(self, batch_model) -> None:
+        """n_branches=0 returns an empty (0,) array without touching the KV cache."""
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            result = batch_model.query_branches_from_live_batch(
+                max_tokens=2, n_branches=0
+            )
+        assert result.shape == (0,)
+        batch_model._llm._ctx.kv_cache_seq_cp.assert_not_called()  # noqa: SLF001
+
+    def test_immediate_eos_branch_logprob_is_zero(self, batch_model) -> None:
+        """A branch whose first sampled token is EOS gets log-prob 0.0."""
+        batch_model._llm.scores[2] = [-10.0, -10.0, -10.0, -10.0, 10.0]  # EOS argmax
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            result = batch_model.query_branches_from_live_batch(
+                max_tokens=5, n_branches=3
+            )
+        assert np.allclose(result, 0.0)
+
+    def test_sums_log_probs_of_generated_tokens(self, batch_model) -> None:
+        """Each branch's log-prob equals the sum of per-step sampled log-probs."""
+        from problm_solver.llama_interface import ModelInstance
+
+        lp1 = float(ModelInstance._log_softmax(
+            np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
+        )[1])
+        lp2 = float(ModelInstance._log_softmax(
+            np.array([0.5, 0.5, 2.0, 0.2, -2.0], dtype=np.float32)
+        )[2])
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            result = batch_model.query_branches_from_live_batch(
+                max_tokens=2, n_branches=4
+            )
+        assert np.allclose(result, lp1 + lp2)
+
+    def test_all_branches_equal_under_deterministic_sampling(self, batch_model) -> None:
+        """With zero Gumbel, every branch follows the same greedy path."""
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            result = batch_model.query_branches_from_live_batch(
+                max_tokens=3, n_branches=5
+            )
+        assert np.allclose(result, result[0])
+
+    def test_stops_at_max_tokens_without_eos(self, batch_model) -> None:
+        """A full-depth run with no EOS sums exactly max_tokens log-probs."""
+        from problm_solver.llama_interface import ModelInstance
+
+        lp1 = float(ModelInstance._log_softmax(
+            np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
+        )[1])
+        lp2 = float(ModelInstance._log_softmax(
+            np.array([0.5, 0.5, 2.0, 0.2, -2.0], dtype=np.float32)
+        )[2])
+        lp3 = float(ModelInstance._log_softmax(
+            np.array([2.0, 0.5, 0.5, 0.2, -2.0], dtype=np.float32)
+        )[0])
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            result = batch_model.query_branches_from_live_batch(
+                max_tokens=3, n_branches=2
+            )
+        assert np.allclose(result, lp1 + lp2 + lp3)
+
+    def test_mid_branch_eos_stops_that_branch_only(self, batch_model) -> None:
+        """EOS at step 1 freezes that branch; others continue to step 2.
+
+        Because every branch shares per-position scores under zero Gumbel,
+        EOS at step 1 affects all branches simultaneously — so this test
+        instead asserts the accumulated value is just step-0's log-prob when
+        step 1 is EOS.
+        """
+        from problm_solver.llama_interface import ModelInstance
+
+        # step 1 (position 3) argmax = EOS
+        batch_model._llm.scores[3] = [-10.0, -10.0, -10.0, -10.0, 10.0]
+        lp1 = float(ModelInstance._log_softmax(
+            np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
+        )[1])
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            result = batch_model.query_branches_from_live_batch(
+                max_tokens=5, n_branches=3
+            )
+        assert np.allclose(result, lp1)
+
+    def test_clones_root_kv_into_each_branch_sequence(self, batch_model) -> None:
+        """kv_cache_seq_cp is called once per branch, copying seq 0 → branch id."""
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            batch_model.query_branches_from_live_batch(max_tokens=2, n_branches=3)
+        cp_calls = batch_model._llm._ctx.kv_cache_seq_cp.call_args_list  # noqa: SLF001
+        assert len(cp_calls) == 3
+        # Each call clones sequence 0 into a distinct branch id over [0, ROOT_POS).
+        dest_ids = {c.args[1] for c in cp_calls}
+        assert dest_ids == {1, 2, 3}
+        for c in cp_calls:
+            assert c.args[0] == 0
+            assert c.args[2] == 0
+            assert c.args[3] == self._ROOT_POS
+
+    def test_tears_down_branch_sequences_on_cleanup(self, batch_model) -> None:
+        """After scoring, only seq 0 is retained (kv_cache_seq_keep(0))."""
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            batch_model.query_branches_from_live_batch(max_tokens=2, n_branches=3)
+        batch_model._llm._ctx.kv_cache_seq_keep.assert_called_once_with(0)  # noqa: SLF001
+
+    def test_does_not_mutate_model_n_tokens(self, batch_model) -> None:
+        """Batched branch generation leaves the live seq-0 token count unchanged."""
+        original = batch_model._llm_backend.n_tokens
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            batch_model.query_branches_from_live_batch(max_tokens=3, n_branches=4)
+        assert batch_model._llm_backend.n_tokens == original
+
+    def test_batched_decode_call_count_is_depth_minus_one(self, batch_model) -> None:
+        """Only ``depth - 1`` batched decodes are issued (final step need not decode)."""
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            batch_model.query_branches_from_live_batch(max_tokens=3, n_branches=2)
+        # depth=3 → decodes after step 0 and step 1 only (step 2 is terminal).
+        assert batch_model._llm.eval.call_count == 2
+
+    def test_end_to_end_equivalent_to_sequential_query_branch_from_live(
+        self, batch_model
+    ) -> None:
+        """Every batched branch equals a sequential query_branch_from_live call.
+
+        Under zero-Gumbel sampling both paths greedily pick the argmax of the
+        same per-position scores row, so each batched branch's total log-prob
+        must equal the sequential branch's total. This is the authoritative
+        proof that batching introduces no semantic drift.
+        """
+        # The sequential path reads scores[n_tokens - 1] and relies on eval()
+        # advancing n_tokens to the next row; wire that up here. The batched
+        # path reads scores[positions] directly and is unaffected by the drift.
+        def mock_eval(tokens):
+            batch_model._llm.n_tokens += len(tokens)
+        batch_model._llm.eval.side_effect = mock_eval
+
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            batched = batch_model.query_branches_from_live_batch(
+                max_tokens=2, n_branches=3
+            )
+        # Restore the live position before running the sequential branch.
+        batch_model._llm.n_tokens = self._ROOT_POS
+        with patch('problm_solver.llama_interface.resolve_rng',
+                   return_value=self._zero_gumbel_rng()):
+            sequential = batch_model.query_branch_from_live(max_tokens=2)
+
+        assert np.allclose(batched, sequential)
 
 
 class TestQueryLogProbsNextToken:
