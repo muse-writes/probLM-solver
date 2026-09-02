@@ -3,6 +3,7 @@
 import contextlib
 import copy
 import logging
+import threading
 from collections.abc import Callable, Iterator
 from inspect import isclass
 from typing import Any, cast
@@ -34,6 +35,8 @@ _logger = logging.getLogger(__name__)
 
 ADEQUATE_TOPK = 30
 ADEQUATE_TOPP = 0.8
+
+_KV_UNIFIED_LOCK = threading.Lock()
 
 
 @contextlib.contextmanager
@@ -72,7 +75,7 @@ def _kv_unified_default_params(*, enabled: bool = True) -> Iterator[None]:
 
     orig = llama_cpp.llama_context_default_params
 
-    def patched() -> Any:
+    def patched() -> Any: #noqa: ANN401
         params = orig()
         params.kv_unified = True
         params.n_seq_max = _KV_UNIFIED_N_SEQ_MAX
@@ -82,7 +85,7 @@ def _kv_unified_default_params(*, enabled: bool = True) -> Iterator[None]:
     # as llama_cpp``), so ``Llama.__init__`` reads ``llama_context_default_params``
     # off ``llama_cpp.llama_cpp`` — patching the package-level re-export would not
     # intercept it. Patch the submodule attribute that ``Llama`` actually uses.
-    with patch.object(llama_cpp.llama_cpp, 'llama_context_default_params', patched):
+    with _KV_UNIFIED_LOCK, patch.object(llama_cpp.llama_cpp, 'llama_context_default_params', patched):
         yield
 
 
@@ -448,7 +451,7 @@ class ModelInstance:
         if n_branches <= 0:
             return branch_log_probs
         if n_branches >= _KV_UNIFIED_N_SEQ_MAX:
-            msg = f'Branches must be <= n_seq ({_KV_UNIFIED_N_SEQ_MAX - 1}, got {n_branches}'
+            msg = f'Branches must be <= n_seq ({_KV_UNIFIED_N_SEQ_MAX - 1}), got {n_branches}'
             raise ValueError(msg)
 
         eos_id = self._llm_backend.token_eos()
