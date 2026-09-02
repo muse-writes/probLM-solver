@@ -17,6 +17,7 @@ Tutorial Pages
 
    reproducibility_tutorial
    r_tutorial
+   greedy_tutorial
 
 CLI
 ---
