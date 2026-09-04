@@ -97,8 +97,6 @@ _KV_UNIFIED_N_SEQ_MAX = 64
 
 # -- Main model instance -- #
 
-# -- Main model instance -- #
-
 class ModelInstance:
     """Keeps a model instance and its context, with methods for querying the Llama instance."""
 

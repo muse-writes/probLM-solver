@@ -493,135 +493,194 @@ class SamplePowerDist:
             self.alpha, np.array(accepted, dtype=np.float64)
         )
 
+    def _run_sequential_chain(self, propose_branch: Callable[[], float]) -> np.float64:
+        """Run the MH accept/reject loop, pulling proposals one at a time.
+
+        Mirrors :meth:`_run_mh_chain` but for proposal paths whose branch
+        log-probabilities cannot be materialised upfront (each proposal
+        mutates shared live state and must be generated on demand). Shared by
+        the live-state and token-ID-context paths so both produce identical
+        chain output for identical proposals.
+
+        :param propose_branch: Zero-arg callable returning one proposed
+            branch log-probability under ``p``.
+        :returns: The sampler's ``future_logprob`` weighting for the chain.
+        """
+        self.branch_sampler.reset()
+        accepted: list[float] = []
+        while True:
+            accepted.append(
+                self.branch_sampler.step(
+                    proposed_log_prob=propose_branch(), alpha=self.alpha,
+                )
+            )
+            if not self.branch_sampler.should_continue(
+                np.array(accepted, dtype=np.float64)
+            ):
+                break
+        return self.branch_sampler.future_logprob(
+            self.alpha, np.array(accepted, dtype=np.float64)
+        )
+
+    @staticmethod
+    def _require_live_callables(context: GenerationContext, what: str) -> None:
+        """Raise ``ValueError`` if any shared live-state callable is missing.
+
+        :param context: The generation context to inspect.
+        :param what: Human-readable label for the calling path, used in the
+            error message.
+        """
+        if (
+            context.base_live_state is None
+            or context.save_live_state is None
+            or context.load_live_state is None
+            or context.eval_tokens is None
+        ):
+            msg = f'{what} requires live-state callables in GenerationContext'
+            raise ValueError(msg)
+
+    def _make_beam_scorer(
+        self, context: GenerationContext
+    ) -> Callable[[int], np.float64]:
+        """Build a per-candidate scorer using token-level beam expansion.
+
+        :raises ValueError: if the token-beam live-state callables are missing.
+        """
+        if context.query_next_ids_from_live is None:
+            msg = 'Token-beam sampler requires live-state callables in GenerationContext'
+            raise ValueError(msg)
+        self._require_live_callables(context, 'Token-beam sampler')
+
+        def score_future_from_candidate_id(candidate_id: int) -> np.float64:
+            return self.branch_sampler.future_logprob_from_context(
+                alpha=self.alpha,
+                base_live_state=context.base_live_state,
+                branch_token_ids=[candidate_id],
+                lookahead_depth=self.lookahead_depth,
+                query_next_ids_from_live=context.query_next_ids_from_live,
+                save_live_state=context.save_live_state,
+                load_live_state=context.load_live_state,
+                eval_tokens=context.eval_tokens,
+            )
+
+        return score_future_from_candidate_id
+
+    def _make_batched_branch_scorer(
+        self, context: GenerationContext
+    ) -> Callable[[int], np.float64] | None:
+        """Build a per-candidate scorer using one batched proposal pass per candidate.
+
+        All ``max_proposals`` branch proposals are drawn from the base model in
+        a single batched call; because proposals are independent of chain
+        state, batching does not change the MH target distribution. Returns
+        ``None`` if the batched live-state path is unavailable.
+        """
+        if (
+            context.query_branches_from_live_batch is None
+            or context.base_live_state is None
+            or context.save_live_state is None
+            or context.load_live_state is None
+            or context.eval_tokens is None
+            or self.branch_sampler.max_proposals <= 0
+        ):
+            return None
+
+        base_live_state = context.base_live_state
+        query_branches_from_live_batch = context.query_branches_from_live_batch
+        load_live_state = context.load_live_state
+        eval_tokens = context.eval_tokens
+        lookahead_depth = self.lookahead_depth
+        n_proposals = self.branch_sampler.max_proposals
+
+        def score_future_from_candidate_id(candidate_id: int) -> np.float64:
+            # Position the live state at the candidate root on seq 0.
+            load_live_state(base_live_state)
+            eval_tokens([candidate_id])
+            proposals = query_branches_from_live_batch(lookahead_depth, n_proposals)
+            return self._run_mh_chain(proposals)
+
+        return score_future_from_candidate_id
+
+    def _make_live_branch_scorer(
+        self, context: GenerationContext
+    ) -> Callable[[int], np.float64] | None:
+        """Build a per-candidate scorer that proposes branches one at a time from live state.
+
+        Returns ``None`` if the sequential live-state path is unavailable.
+        """
+        if (
+            context.query_branch_from_live is None
+            or context.base_live_state is None
+            or context.save_live_state is None
+            or context.load_live_state is None
+            or context.eval_tokens is None
+        ):
+            return None
+
+        base_live_state = context.base_live_state
+        query_branch_from_live = context.query_branch_from_live
+        save_live_state = context.save_live_state
+        load_live_state = context.load_live_state
+        eval_tokens = context.eval_tokens
+        lookahead_depth = self.lookahead_depth
+
+        def score_future_from_candidate_id(candidate_id: int) -> np.float64:
+            load_live_state(base_live_state)
+            eval_tokens([candidate_id])
+            candidate_root_state = save_live_state()
+
+            def propose_branch() -> float:
+                # Reload the candidate root before each proposal so the branch
+                # grows from the same base context every iteration.
+                load_live_state(candidate_root_state)
+                return query_branch_from_live(lookahead_depth)
+
+            return self._run_sequential_chain(propose_branch)
+
+        return score_future_from_candidate_id
+
+    def _make_context_branch_scorer(
+        self, context: GenerationContext
+    ) -> Callable[[int], np.float64]:
+        """Build a per-candidate scorer using token-ID context branches (no live state)."""
+        context_tokens = context.context_tokens
+        query_branch = context.query_branch
+        lookahead_depth = self.lookahead_depth
+
+        def score_future_from_candidate_id(candidate_id: int) -> np.float64:
+            branch_ctx = [*list(context_tokens), candidate_id]
+            return self._run_sequential_chain(
+                lambda: query_branch(branch_ctx, lookahead_depth)
+            )
+
+        return score_future_from_candidate_id
+
+    def _make_branch_scorer(
+        self, context: GenerationContext
+    ) -> Callable[[int], np.float64]:
+        """Select the best available branch-based per-candidate scorer.
+
+        Preference order: batched live-state, sequential live-state,
+        token-ID-context fallback.
+        """
+        return (
+            self._make_batched_branch_scorer(context)
+            or self._make_live_branch_scorer(context)
+            or self._make_context_branch_scorer(context)
+        )
+
     def __call__(self, context: GenerationContext) -> CandidateTokens:
         """Apply power-distribution adjustment using lookahead branch sampling.
 
         :param context: The current generation context in token-ID space.
         :returns: Adjusted candidate token IDs with log-probabilities.
         """
-        result: dict[int, float] = {}
-
         if self.branch_sampler.supports_token_beam:
-            if (
-                context.base_live_state is None
-                or context.query_next_ids_from_live is None
-                or context.save_live_state is None
-                or context.load_live_state is None
-                or context.eval_tokens is None
-            ):
-                msg = 'Token-beam sampler requires live-state callables in GenerationContext'
-                raise ValueError(msg)
-
-            base_live_state = context.base_live_state
-            query_next_ids_from_live = context.query_next_ids_from_live
-            save_live_state = context.save_live_state
-            load_live_state = context.load_live_state
-            eval_tokens = context.eval_tokens
-
-            def score_future(branch_token_ids: list[int]) -> np.float64:
-                return self.branch_sampler.future_logprob_from_context(
-                    alpha=self.alpha,
-                    base_live_state=base_live_state,
-                    branch_token_ids=branch_token_ids,
-                    lookahead_depth=self.lookahead_depth,
-                    query_next_ids_from_live=query_next_ids_from_live,
-                    save_live_state=save_live_state,
-                    load_live_state=load_live_state,
-                    eval_tokens=eval_tokens,
-                )
+            score_future_from_candidate_id = self._make_beam_scorer(context)
         else:
-            has_batched_branch = (
-                context.query_branches_from_live_batch is not None
-                and context.base_live_state is not None
-                and context.save_live_state is not None
-                and context.load_live_state is not None
-                and context.eval_tokens is not None
-                and self.branch_sampler.max_proposals > 0
-            )
-            has_live_branch = (
-                context.query_branch_from_live is not None
-                and context.base_live_state is not None
-                and context.save_live_state is not None
-                and context.load_live_state is not None
-                and context.eval_tokens is not None
-            )
+            score_future_from_candidate_id = self._make_branch_scorer(context)
 
-            if has_batched_branch:
-                base_live_state = context.base_live_state
-                query_branches_from_live_batch = context.query_branches_from_live_batch
-                load_live_state = context.load_live_state
-                eval_tokens = context.eval_tokens
-                n_proposals = self.branch_sampler.max_proposals
-
-                def score_future_from_candidate_id(candidate_id: int) -> np.float64:
-                    # Position the live state at the candidate root on seq 0.
-                    load_live_state(base_live_state)
-                    eval_tokens([candidate_id])
-                    # Generate all proposals in one batched pass; proposals are
-                    # base-model draws, independent of chain state, so batching
-                    # does not change the MH target distribution.
-                    proposals = query_branches_from_live_batch(
-                        self.lookahead_depth, n_proposals
-                    )
-                    return self._run_mh_chain(proposals)
-            elif has_live_branch:
-                base_live_state = context.base_live_state
-                query_branch_from_live = context.query_branch_from_live
-                save_live_state = context.save_live_state
-                load_live_state = context.load_live_state
-                eval_tokens = context.eval_tokens
-
-                def score_future_from_candidate_id(candidate_id: int) -> np.float64:
-                    load_live_state(base_live_state)
-                    eval_tokens([candidate_id])
-                    candidate_root_state = save_live_state()
-
-                    branch_log_probs_list: list[float] = []
-                    self.branch_sampler.reset()
-
-                    while True:
-                        load_live_state(candidate_root_state)
-                        proposed_branch_log_prob = query_branch_from_live(self.lookahead_depth)
-
-                        accepted_log_prob = self.branch_sampler.step(
-                            proposed_log_prob=proposed_branch_log_prob,
-                            alpha=self.alpha,
-                        )
-                        branch_log_probs_list.append(accepted_log_prob)
-
-                        if not self.branch_sampler.should_continue(
-                            np.array(branch_log_probs_list, dtype=np.float64)
-                        ):
-                            break
-
-                    branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
-                    return self.branch_sampler.future_logprob(self.alpha, branch_log_probs)
-            else:
-                def score_future_from_candidate_id(candidate_id: int) -> np.float64:
-                    branch_ctx = list(context.context_tokens) + [candidate_id]
-                    branch_log_probs_list: list[float] = []
-                    self.branch_sampler.reset()
-
-                    while True:
-                        proposed_branch_log_prob = context.query_branch(
-                            branch_ctx,
-                            self.lookahead_depth,
-                        )
-
-                        accepted_log_prob = self.branch_sampler.step(
-                            proposed_log_prob=proposed_branch_log_prob,
-                            alpha=self.alpha,
-                        )
-                        branch_log_probs_list.append(accepted_log_prob)
-
-                        if not self.branch_sampler.should_continue(
-                            np.array(branch_log_probs_list, dtype=np.float64)
-                        ):
-                            break
-
-                    branch_log_probs = np.array(branch_log_probs_list, dtype=np.float64)
-                    return self.branch_sampler.future_logprob(self.alpha, branch_log_probs)
-
+        result: dict[int, float] = {}
         candidate_ids = context.token_id_probs.candidate_ids
         candidate_logprobs = context.token_id_probs.candidate_logprobs
 
@@ -634,10 +693,7 @@ class SamplePowerDist:
         )
         for token_id, log_prob in candidate_bar:
             tid = int(token_id)
-            if self.branch_sampler.supports_token_beam:
-                future_lp = score_future([tid])
-            else:
-                future_lp = score_future_from_candidate_id(tid)
+            future_lp = score_future_from_candidate_id(tid)
             result[tid] = self.alpha * float(log_prob) + float(future_lp)
 
         return id_logprobs_to_candidate_tokens(result)
