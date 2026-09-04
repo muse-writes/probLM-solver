@@ -12,7 +12,7 @@ This tutorial builds the smallest possible custom sampler from scratch: a
 It is intentionally short — short enough to type out live and talk through in
 a presentation. By the end you will have written your own
 :data:`AdjustFn` and run it through
-:meth:`Model.generate_adjusted()`.
+:meth:`Model.generate_with_sampler()`.
 
 Prerequisites
 -------------
@@ -67,7 +67,7 @@ Pass ``greedy`` as the ``adjust_fn`` exactly like any built-in sampler:
 
    model = Model('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
 
-   data = model.generate_adjusted(
+   data = model.generate_with_sampler(
        top_k=40,
        top_p=1.0,
        adjust_fn=greedy,

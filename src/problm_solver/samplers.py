@@ -1,4 +1,4 @@
-"""Implement several adjustment functions for generate_adjusted."""
+"""Implement several sampling functions for generate_with_sampler and sample_token."""
 
 import logging
 from abc import ABC, abstractmethod
@@ -22,7 +22,7 @@ _logger = logging.getLogger(__name__)
 class GenerationContext:
     """All information available to an :data:`AdjustFn` at each generation step.
 
-    Injected by ``generate_adjusted()`` so that adjustment functions can
+    Injected by ``generate_with_sampler()`` so that adjustment functions can
     access model-querying capabilities without a direct dependency on
     ``Model``. All mutable fields are defensive copies.
 

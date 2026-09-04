@@ -77,8 +77,8 @@ cli.py → TqdmHandler (utils.py)
 3. `Model` is created; `logits_all=True` for functions 2, 3, and 4
 4. **Text responses** (1): `model.generate_data(n)` → `LLMOutputData`; saved to `responses/`
 5. **Token + probability responses** (2): `model.query_log_probs()` → `LLMTokenData`; saved to `probabilities/`
-6. **Low-temperature generation** (3): `model.generate_adjusted(top_k, top_p, SampleLowTemp(alpha), max_tokens, alpha=alpha)` → `LLMOutputDataFull`; saved to `responses/`
-7. **Power MCMC generation** (4): `model.generate_adjusted(top_k, top_p, SamplePowerDist(alpha, depth, MetropolisSampler()), max_tokens, alpha=alpha, sampling_method=..., branch_sampler=...)` → `LLMOutputDataFull`; saved to `responses/`
+6. **Low-temperature generation** (3): `model.generate_with_sampler(top_k, top_p, SampleLowTemp(alpha), max_tokens, alpha=alpha)` → `LLMOutputDataFull`; saved to `responses/`
+7. **Power MCMC generation** (4): `model.generate_with_sampler(top_k, top_p, SamplePowerDist(alpha, depth, MetropolisSampler()), max_tokens, alpha=alpha, sampling_method=..., branch_sampler=...)` → `LLMOutputDataFull`; saved to `responses/`
 
 ---
 
@@ -120,7 +120,7 @@ cli.py → TqdmHandler (utils.py)
   - `Jinja2ChatFormatter` is patched at `problm_solver.llama_interface.Jinja2ChatFormatter` in `TestFormatChatPrompt`
   - Low-level `eval`/`scores`/`save_state`/`load_state` methods are mocked with `side_effect` functions that maintain `n_tokens` state, mirroring real llama_cpp behaviour; `scores` is a real numpy array with known values at the relevant `n_tokens - 1` row
   - Tests that check **exact log-prob or probability values** and require deterministic token selection must patch `problm_solver.llama_interface._as_rng` to return a `MagicMock` whose `.gumbel` returns `np.zeros(vocab_size)`. **Do not** use `patch('numpy.random.gumbel', ...)` — the code uses `numpy.random.Generator.gumbel` (new-style API), which is unaffected by that patch. Tests that only check structure, counts, or types do not need gumbel control.
-  - `_format_chat_prompt`, `sample_from_logprobs`, and `prob_of_token` are all patched in the `gen_adj_model` fixture via `contextlib.ExitStack`
+  - `_format_chat_prompt`, `sample_from_logprobs`, and `prob_of_token` are all patched in the `gen_smpl_model` fixture via `contextlib.ExitStack`
   - `adjust_fn` receives a `GenerationContext`; `MagicMock.call_args_list` inspection reads `.prev_probs` from the context object
   - `GenerationContext` fixtures in `test_samplers.py` supply a `query_branch=MagicMock(return_value=-1.5)` field
   - `mock_sampler` in `TestSamplePowerDistCall` sets `future_logprob.return_value = 0.0` so output values are Python `float` rather than `MagicMock`
@@ -147,11 +147,11 @@ cli.py → TqdmHandler (utils.py)
 
 These are recurring sources of bugs in this codebase that an agent should be aware of before making changes.
 
-1. **`self._llm.n_tokens` vs the `top_k` parameter** (`llama_interface.py`): `self._llm.n_tokens` is the llama.cpp model's current token count (changes with every `eval()` call). The parameter formerly named `n_tokens` in `generate_adjusted` has been renamed to `top_k`. Do not confuse them — `scores[self._llm.n_tokens - 1]` is always the correct logit row.
+1. **`self._llm.n_tokens` vs the `top_k` parameter** (`llama_interface.py`): `self._llm.n_tokens` is the llama.cpp model's current token count (changes with every `eval()` call). Do not confuse them — `scores[self._llm.n_tokens - 1]` is always the correct logit row.
 
-2. **`special=True`/`special=False` in `generate_adjusted`** (`llama_interface.py`): Two separate `tokenize()` calls serve different purposes. The `token_ids` check uses `special=True` so that `<|im_end|>` is recognised as `eos_id` and generation terminates. The `tokenize_token` lambda passed to `GenerationContext` uses `special=False` so that special token strings are not injected as actual special token IDs into branch contexts (which corrupts branch evaluation).
+2. **`special=True`/`special=False` in `generate_with_sampler`** (`llama_interface.py`): Two separate `tokenize()` calls serve different purposes. The `token_ids` check uses `special=True` so that `<|im_end|>` is recognised as `eos_id` and generation terminates. The `tokenize_token` lambda passed to `GenerationContext` uses `special=False` so that special token strings are not injected as actual special token IDs into branch contexts (which corrupts branch evaluation).
 
-3. **Save/restore around `adjust_fn`** (`llama_interface.py`): `SamplePowerDist` calls `query_branch` internally, which calls `reset()` + `eval()` on the shared `_llm`. This corrupts the KV-cache state. `generate_adjusted` saves state immediately before `adjust_fn(ctx)` and restores it immediately after, so the subsequent incremental `eval(token_ids)` always appends to the correct generation context.
+3. **Save/restore around `adjust_fn`** (`llama_interface.py`): `SamplePowerDist` calls `query_branch` internally, which calls `reset()` + `eval()` on the shared `_llm`. This corrupts the KV-cache state. `generate_with_sampler` saves state immediately before `adjust_fn(ctx)` and restores it immediately after, so the subsequent incremental `eval(token_ids)` always appends to the correct generation context.
 
 4. **`past_lp` is a constant shift** (`samplers.py`): In `SamplePowerDist.__call__`, `past_lp = alpha * sum(log(prev_probs))` is computed once and added to every candidate's score. Because `sample_from_logprobs` and `prob_of_token` both apply shift-invariant softmax (`lp -= lp.max()`), `past_lp` has no effect on which token is selected or on the stored per-token probabilities.
 
@@ -175,10 +175,10 @@ These are recurring sources of bugs in this codebase that an agent should be awa
 
 6. **`top_p` stubbed** (`llama_interface.py`): resolved — see below.
 
-7. **`ui_generate_low_temp` missing `sampling_method`** (`cli.py`): does not pass `sampling_method` to `generate_adjusted()`; the label stored in `LLMOutputDataFull` is auto-derived as `'SampleLowTemp'` rather than a clean human-readable string.
+7. **`ui_generate_low_temp` missing `sampling_method`** (`cli.py`): does not pass `sampling_method` to `generate_with_sampler()`; the label stored in `LLMOutputDataFull` is auto-derived as `'SampleLowTemp'` rather than a clean human-readable string.
 
 8. **`get_adjusted_path()` extension** (`cli.py`): returns a `.jsonl` path, but `LLMOutputDataFull.write()` produces single-record JSON; should be `.json`.
 
 9. **`_written` comment indentation** (`data.py`): the inline comment `# Unsaved data state tracking variable.` before `_written` is at column 0 inside the `LLMOutputDataFull` class body; should be indented 4 spaces.
 
-10. **`query_next` lambda resets model state** (`llama_interface.py`): the `query_next` callable in `GenerationContext` is bound to `query_log_probs_next_token`, which calls `reset()` + `eval()` on the shared `_llm` instance. If an `adjust_fn` calls `query_next` during `generate_adjusted`, it will corrupt the incremental eval state that the generation loop depends on. The same issue applied to `query_branch` and is now resolved (see below), but `query_next` remains unfixed as `SamplePowerDist` does not currently use it.
+10. **`query_next` lambda resets model state** (`llama_interface.py`): the `query_next` callable in `GenerationContext` is bound to `query_log_probs_next_token`, which calls `reset()` + `eval()` on the shared `_llm` instance. If an `adjust_fn` calls `query_next` during `generate_with_sampler`, it will corrupt the incremental eval state that the generation loop depends on. The same issue applied to `query_branch` and is now resolved (see below), but `query_next` remains unfixed as `SamplePowerDist` does not currently use it.

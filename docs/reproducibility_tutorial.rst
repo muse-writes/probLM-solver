@@ -39,7 +39,7 @@ Minimal reproducible script
        rng=run_rng,
    )
 
-   out_identity = model.generate_adjusted(
+   out_identity = model.generate_with_sampler(
        top_k=30,
        top_p=0.9,
        adjust_fn=adjust_identity,
@@ -49,7 +49,7 @@ Minimal reproducible script
 
    model.change_context(prompt)
 
-   out_low_temp = model.generate_adjusted(
+   out_low_temp = model.generate_with_sampler(
        top_k=30,
        top_p=0.9,
        adjust_fn=SampleLowTemp(alpha=2.0),

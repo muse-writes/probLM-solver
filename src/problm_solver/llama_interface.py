@@ -299,7 +299,7 @@ class Model:
 
         EOS detection is the caller's responsibility: the EOS token will
         appear naturally in the returned distribution when the model prefers
-        it, and :meth:`generate_adjusted` stops the loop after the EOS token
+        it, and :meth:`generate_with_sampler` stops the loop after the EOS token
         ID is sampled.
 
         :param context_tokens: The current context as a list of integer token IDs.
@@ -684,7 +684,7 @@ class Model:
 
 ## -- Adjusting probabilities -- ##
 
-    def generate_adjusted(
+    def generate_with_sampler(
         self,
         top_k: int,
         top_p: float,
@@ -716,7 +716,7 @@ class Model:
         # Hyperparam and sampling setup.
         if not self._logits_all:
             msg = (
-                'generate_adjusted() requires logits_all=True when constructing Model '
+                'generate_with_sampler() requires logits_all=True when constructing Model '
                 'so per-token logits are available.'
             )
             raise ValueError(msg)
@@ -755,12 +755,12 @@ class Model:
         # Main generation loop.
         method_rng = resolve_rng(
             self._rng if rng is None else rng,
-            stream='llama.generate_adjusted',
+            stream='llama.generate_with_sampler',
         )
         reset_fn = getattr(adjust_fn, 'reset', None)
         if callable(reset_fn):
             cast('Callable[[], None]', reset_fn)()
-        for step in tqdm(range(max_tokens), desc='generate_adjusted', unit='tok'):
+        for step in tqdm(range(max_tokens), desc='generate_with_sampler', unit='tok'):
 
             # Determine logprobs and sample intersection of top-k and top-p.
             logprobs = self._log_softmax(self._llm_backend.last_logits())
@@ -851,7 +851,7 @@ class Model:
         )
 
 
-    def sample_token_adjusted(
+    def sample_token(
         self,
         top_k: int,
         top_p: float,
@@ -892,7 +892,7 @@ class Model:
         """
         if not self._logits_all:
             msg = (
-                'sample_token_adjusted() requires logits_all=True when constructing '
+                'sample_token() requires logits_all=True when constructing '
                 'Model so per-token logits are available.'
             )
             raise ValueError(msg)
@@ -901,7 +901,7 @@ class Model:
 
         method_rng = resolve_rng(
             self._rng if rng is None else rng,
-            stream='llama.sample_token_adjusted',
+            stream='llama.sample_token',
         )
 
         state_source: str
@@ -1028,7 +1028,7 @@ class Model:
         for ii in tqdm(range(n_problems), desc='dataset_progress', unit='problem'):
             problem = dataset[ii]
             self.change_context(problem)
-            out = self.generate_adjusted(top_k, top_p, adjust_fn, max_tokens)
+            out = self.generate_with_sampler(top_k, top_p, adjust_fn, max_tokens)
             answers.append(''.join(out.response_probabilities[0]))
             _logger.info('Completed problem: %d/%d', ii + 1, n_problems)
         return answers

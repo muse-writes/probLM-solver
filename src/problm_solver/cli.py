@@ -195,7 +195,7 @@ def ui_generate_low_temp(model: Model, model_path: Path) -> None:
         'Please input the number of most probable token candidates (M) to consider at each step: '
     ))
     max_tokens = int(input('Please input the maximum number of response tokens: '))
-    data = model.generate_adjusted(
+    data = model.generate_with_sampler(
         top_k=top_k,
         top_p=0.9,
         adjust_fn=sampling_fn,
@@ -229,7 +229,7 @@ def ui_generate_power_mcmc(model: Model, model_path: Path) -> None:
         lookahead_depth=peek,
         branch_sampler=MetropolisSampler(max_branches=10)
     )
-    data = model.generate_adjusted(
+    data = model.generate_with_sampler(
         top_k=top_k,
         top_p=0.9,
         adjust_fn=sampling_fn,
