@@ -9,7 +9,7 @@ import pandas as pd
 
 from problm_solver.data import LLMOutputData, LLMOutputDataFull, LLMTokenData
 from problm_solver.datasets import get_math500, get_problems_math500
-from problm_solver.llama_interface import ModelInstance
+from problm_solver.llama_interface import Model
 from problm_solver.samplers import (
     BeamSampler,
     MetropolisSampler,
@@ -117,7 +117,7 @@ def ui_select_model() -> Path:
         print('Invalid choice, try again.')
 
 
-def ui_gen_data(model: ModelInstance, model_path: Path) -> None:
+def ui_gen_data(model: Model, model_path: Path) -> None:
     """Handle user interface for generating LLM data."""
     data_size = int(input('Enter the number of samples to take: ').strip())
     while not isinstance(data_size, int):
@@ -163,7 +163,7 @@ def ui_save_token_data(fname: str, data: LLMTokenData) -> None:
             resolved = True
 
 
-def ui_get_probs(model: ModelInstance, model_path: Path) -> None:
+def ui_get_probs(model: Model, model_path: Path) -> None:
     """Handle user interface for querying once with logprobs enabled."""
     data = model.query_log_probs()
     print('Token probability query complete.')
@@ -186,7 +186,7 @@ def ui_select_function() -> int:
         print('Invalid choice, try again.')
 
 
-def ui_generate_low_temp(model: ModelInstance, model_path: Path) -> None:
+def ui_generate_low_temp(model: Model, model_path: Path) -> None:
     """Handle user interface for getting model response using low temp sampling."""
     print('\nGenerating output from low-temp sampling.')
     alpha = float(input('Please input the value of alpha, as a float: '))
@@ -208,7 +208,7 @@ def ui_generate_low_temp(model: ModelInstance, model_path: Path) -> None:
     ui_save_data(str(response_path), data)
 
 
-def ui_generate_power_mcmc(model: ModelInstance, model_path: Path) -> None:
+def ui_generate_power_mcmc(model: Model, model_path: Path) -> None:
     """Handle user interface for getting model response using power sampling with MCMC."""
     print('\nGenerating output using power sampling.')
 
@@ -244,7 +244,7 @@ def ui_generate_power_mcmc(model: ModelInstance, model_path: Path) -> None:
     ui_save_data(str(response_path), data)
 
 
-def ui_math500(model: ModelInstance, model_path: Path) -> None:
+def ui_math500(model: Model, model_path: Path) -> None:
     """Answer MATH500 problems and write response to file."""
     math500_data = get_math500()
     math500_problems = get_problems_math500()
@@ -317,7 +317,7 @@ def main() -> None:
 
     choice = ui_select_function()
     use_logits: bool = choice in (PROBS, LOW_TEMP, POWER_SAMPLING, MATH500)
-    model = ModelInstance(str(model_path), context, logits_all=use_logits)
+    model = Model(str(model_path), context, logits_all=use_logits)
 
     match choice:
         case 1:

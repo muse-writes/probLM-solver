@@ -12,7 +12,7 @@ This tutorial builds the smallest possible custom sampler from scratch: a
 It is intentionally short — short enough to type out live and talk through in
 a presentation. By the end you will have written your own
 :data:`AdjustFn` and run it through
-:meth:`ModelInstance.generate_adjusted()`.
+:meth:`Model.generate_adjusted()`.
 
 Prerequisites
 -------------
@@ -63,9 +63,9 @@ Pass ``greedy`` as the ``adjust_fn`` exactly like any built-in sampler:
    :linenos:
    :name: greedy-use
 
-   from problm_solver.llama_interface import ModelInstance
+   from problm_solver.llama_interface import Model
 
-   model = ModelInstance('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
+   model = Model('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
 
    data = model.generate_adjusted(
        top_k=40,

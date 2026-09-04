@@ -33,7 +33,7 @@ You will be asked to provide a ``.gguf`` model file in the directory ``~/.problm
 Scripting with ``problm_solver``
 --------------------------------
 
-The main class that probLM-solver uses for interacting with an LLM is ``problm_solver.llama_interface.ModelInstance``.
+The main class that probLM-solver uses for interacting with an LLM is ``problm_solver.llama_interface.Model``.
 A simple script for setting up a model, and generating a response with low-temperature sampling, can be seen in the code block below.
 
 .. sourcecode:: python
@@ -41,12 +41,12 @@ A simple script for setting up a model, and generating a response with low-tempe
    :name: low-temp
 
    from problm_solver.samplers import SampleLowTemp
-   from problm_solver.llama_interface import ModelInstance
+   from problm_solver.llama_interface import Model
 
    temp = 0.5
    top_k = 8
    top_p = 0.9
-   model = ModelInstance('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
+   model = Model('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
 
    sampling_func = SampleLowTemp(alpha=1./temp)
    data = model.generate_adjusted(
@@ -59,7 +59,7 @@ A simple script for setting up a model, and generating a response with low-tempe
 
 Let's explain in detail what this code is doing.
 
-The key idea here is that sampling functions can be defined or freely switched between when generating data, as they aren't specified until ``ModelInstance.generate_adjusted()`` is called.
+The key idea here is that sampling functions can be defined or freely switched between when generating data, as they aren't specified until ``Model.generate_adjusted()`` is called.
 
 A couple of hyperparameters are specified in advance, namely the temperature (``temp``), of the model and the number of most-probable tokens considered at each step (``top_k``). If you have already heard of low-temperature sampling or top-k sampling, these concepts will be familiar.
 
@@ -91,7 +91,7 @@ Sampling Token-by-token
 
 The previous section introduced the function :meth:`generate_adjusted()` to generate outputs based on a provided context and sampling function.
 It may sometimes be desirable for the user to generate one token at a time, to either switch sampling functions out or analyze specific probabilities.
-This is where the method :meth:`ModelInstance.sample_token_adjusted()` is used.
+This is where the method :meth:`Model.sample_token_adjusted()` is used.
 See the following example:
 
 .. sourcecode:: python
@@ -99,12 +99,12 @@ See the following example:
    :name: sample-token
 
    from problm_solver.samplers import SampleLowTemp
-   from problm_solver.llama_interface import ModelInstance
+   from problm_solver.llama_interface import Model
 
    temp = 0.5
    top_k = 30
    top_p = 0.9
-   model = ModelInstance('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
+   model = Model('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
 
    sampling_func = SampleLowTemp(alpha=1./temp)
    token_data = model.sample_token_adjusted(
@@ -132,12 +132,12 @@ Let's start with the code snippet below. In this example we use the built-in Met
    :name: power-dist
 
    from problm_solver.samplers import MetropolisSampler, SamplePowerDist
-   from problm_solver.llama_interface import ModelInstance
+   from problm_solver.llama_interface import Model
 
    temp = 0.5
    top_k = 8
    peek = 10
-   model = ModelInstance('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
+   model = Model('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
 
    sampling_func = SamplePowerDist(
        alpha=1./temp,
@@ -227,7 +227,7 @@ It implements four required methods (plus an optional beam hook):
 - ``BranchSampler.should_continue()`` handles logic for terminating proposal sampling.
 - ``BranchSampler.future_logprob()`` combines collected branch log-probabilities into one future score used by ``SamplePowerDist``.
 
-All of these methods are called at some point by ``ModelInstance.generate_adjusted()``.
+All of these methods are called at some point by ``Model.generate_adjusted()``.
 
 A user who has made the class ``MySampler``, can now pass it to an instance of ``SamplePowerDist``, to create a sampling function.
 

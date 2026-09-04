@@ -96,7 +96,7 @@ Please see the below example which loads and queries a model in R.
     llama <- import("problm_solver.llama_interface")
     #adj <- import("problm_solver.llama_interface")
 
-    model <- llama$ModelInstance(
+    model <- llama$Model(
       fname = "path/to/model.gguf",
       context = "Why is the sky blue?",
       n_ctx = as.integer(4096),
@@ -109,7 +109,7 @@ Please see the below example which loads and queries a model in R.
 Sampling Functions in R
 -----------------------
 
-``reticulate`` implicitly converts between Python and R callables, so to create a custom sampling function, you can define it as an R function, and use ``problm_solver``'s ``ModelInstance.generate_adjusted()`` function as usual.
+``reticulate`` implicitly converts between Python and R callables, so to create a custom sampling function, you can define it as an R function, and use ``problm_solver``'s ``Model.generate_adjusted()`` function as usual.
 
 Bear in mind that a sampling function takes a generic dataclass ``GenerationContext`` as an argument, so the R function will need to follow the following scheme
 

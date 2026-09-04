@@ -45,7 +45,7 @@ def _kv_unified_default_params(*, enabled: bool = True) -> Iterator[None]:
 
     ``llama-cpp-python``'s :class:`~llama_cpp.Llama` constructor does not
     expose ``kv_unified``, but multi-sequence batched decoding — used by
-    :meth:`ModelInstance.query_branches_from_live_batch` to generate parallel
+    :meth:`Model.query_branches_from_live_batch` to generate parallel
     branch proposals — requires a *unified* KV-cache pool. With the default
     partitioned pool (``kv_unified=False``) the context is created with
     ``n_seq_max=1``, so decoding into sequence ids > 0 is rejected with
@@ -97,7 +97,7 @@ _KV_UNIFIED_N_SEQ_MAX = 64
 
 # -- Main model instance -- #
 
-class ModelInstance:
+class Model:
     """Keeps a model instance and its context, with methods for querying the Llama instance."""
 
     def __init__( # noqa: PLR0913
@@ -716,7 +716,7 @@ class ModelInstance:
         # Hyperparam and sampling setup.
         if not self._logits_all:
             msg = (
-                'generate_adjusted() requires logits_all=True when constructing ModelInstance '
+                'generate_adjusted() requires logits_all=True when constructing Model '
                 'so per-token logits are available.'
             )
             raise ValueError(msg)
@@ -893,7 +893,7 @@ class ModelInstance:
         if not self._logits_all:
             msg = (
                 'sample_token_adjusted() requires logits_all=True when constructing '
-                'ModelInstance so per-token logits are available.'
+                'Model so per-token logits are available.'
             )
             raise ValueError(msg)
 

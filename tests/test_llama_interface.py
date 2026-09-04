@@ -1,4 +1,4 @@
-"""Tests for ModelInstance in llama_interface.py."""
+"""Tests for Model in llama_interface.py."""
 
 from contextlib import ExitStack
 from unittest.mock import MagicMock, call, patch
@@ -11,7 +11,7 @@ from problm_solver.samplers import id_logprobs_to_candidate_tokens
 
 
 def _make_llama_mock(response_text: str = 'Mock response.') -> MagicMock:
-    """Return a MagicMock that mimics the low-level llama.cpp API used by ModelInstance."""
+    """Return a MagicMock that mimics the low-level llama.cpp API used by Model."""
     mock_llm = MagicMock()
     mock_llm.metadata = {
         'general.architecture': 'llama',
@@ -26,58 +26,58 @@ def _make_llama_mock(response_text: str = 'Mock response.') -> MagicMock:
 
 @pytest.fixture
 def model_instance():
-    """Return a ModelInstance with a mocked underlying Llama object."""
-    from problm_solver.llama_interface import ModelInstance
+    """Return a Model with a mocked underlying Llama object."""
+    from problm_solver.llama_interface import Model
 
     with patch('problm_solver.llama_interface.Llama') as MockLlama:
         MockLlama.return_value = _make_llama_mock('Test answer.')
-        instance = ModelInstance(fname='fake.gguf', context='What is the answer?')
+        instance = Model(fname='fake.gguf', context='What is the answer?')
     return instance
 
 
-class TestModelInstanceInit:
-    """Tests for ModelInstance.__init__."""
+class TestModelInit:
+    """Tests for Model.__init__."""
 
     def test_logits_all_defaults_to_false(self) -> None:
         """logits_all defaults to False, so Llama is constructed without it set."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         with patch('problm_solver.llama_interface.Llama') as MockLlama:
             MockLlama.return_value = _make_llama_mock()
-            ModelInstance(fname='fake.gguf', context='Hello')
+            Model(fname='fake.gguf', context='Hello')
             _, kwargs = MockLlama.call_args
             assert kwargs.get('logits_all') is False
 
     def test_logits_all_true_passed_to_llama(self) -> None:
         """logits_all=True is forwarded to the Llama constructor."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         with patch('problm_solver.llama_interface.Llama') as MockLlama:
             MockLlama.return_value = _make_llama_mock()
-            ModelInstance(fname='fake.gguf', context='Hello', logits_all=True)
+            Model(fname='fake.gguf', context='Hello', logits_all=True)
             _, kwargs = MockLlama.call_args
             assert kwargs.get('logits_all') is True
 
     def test_cache_sized_from_model_metadata(self) -> None:
         """LlamaRAMCache capacity is derived from model metadata and n_ctx."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         with patch('problm_solver.llama_interface.Llama') as MockLlama, \
              patch('problm_solver.llama_interface.LlamaRAMCache') as MockCache:
             MockLlama.return_value = _make_llama_mock()
-            ModelInstance(fname='fake.gguf', context='Hello')
+            Model(fname='fake.gguf', context='Hello')
             _, kwargs = MockCache.call_args
             # 4 states × (2048 ctx × 2 K&V × 32 layers × 8 KV heads × 128 head_dim × 2 bytes)
             assert kwargs.get('capacity_bytes') == 4 * 2048 * 2 * 32 * 8 * 128 * 2
 
     def test_wires_c_backend(self) -> None:
-        """ModelInstance always wires the ModelCBackend."""
-        from problm_solver.llama_interface import ModelInstance
+        """Model always wires the ModelCBackend."""
+        from problm_solver.llama_interface import Model
         from problm_solver.llama_lowlevel import ModelCBackend
 
         with patch('problm_solver.llama_interface.Llama') as mock_llama:
             mock_llama.return_value = _make_llama_mock()
-            instance = ModelInstance(fname='fake.gguf', context='Hello')
+            instance = Model(fname='fake.gguf', context='Hello')
 
         assert isinstance(instance._llm_backend, ModelCBackend)
 
@@ -111,29 +111,29 @@ class TestKVUnifiedContextShim:
             assert llama_cpp.llama_cpp.llama_context_default_params().kv_unified is False
 
     def test_model_instance_requests_kv_unified_by_default(self) -> None:
-        """Constructing ModelInstance enters the kv_unified shim by default."""
-        from problm_solver.llama_interface import ModelInstance
+        """Constructing Model enters the kv_unified shim by default."""
+        from problm_solver.llama_interface import Model
 
         with patch('problm_solver.llama_interface.Llama') as MockLlama, \
              patch('problm_solver.llama_interface._kv_unified_default_params') as shim:
             MockLlama.return_value = _make_llama_mock()
-            ModelInstance(fname='fake.gguf', context='Hello')
+            Model(fname='fake.gguf', context='Hello')
         # Default kv_unified=True → shim entered with enabled=True.
         shim.assert_called_once_with(enabled=True)
 
     def test_model_instance_can_disable_kv_unified(self) -> None:
         """kv_unified=False skips the shim (stock llama.cpp context)."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         with patch('problm_solver.llama_interface.Llama') as MockLlama, \
              patch('problm_solver.llama_interface._kv_unified_default_params') as shim:
             MockLlama.return_value = _make_llama_mock()
-            ModelInstance(fname='fake.gguf', context='Hello', kv_unified=False)
+            Model(fname='fake.gguf', context='Hello', kv_unified=False)
         shim.assert_called_once_with(enabled=False)
 
 
-class TestModelInstanceQuery:
-    """Tests for ModelInstance.query."""
+class TestModelQuery:
+    """Tests for Model.query."""
 
 @pytest.fixture
 def low_level_model(model_instance):
@@ -174,8 +174,8 @@ def low_level_model(model_instance):
         yield model_instance
 
 
-class TestModelInstanceQuery:
-    """Tests for ModelInstance.query."""
+class TestModelQuery:
+    """Tests for Model.query."""
 
     def test_returns_string(self, low_level_model) -> None:
         """query() returns a plain string."""
@@ -212,8 +212,8 @@ class TestModelInstanceQuery:
         assert low_level_model._llm.eval.call_count == 2
 
 
-class TestModelInstanceQueryNTimes:
-    """Tests for ModelInstance.query_n_times."""
+class TestModelQueryNTimes:
+    """Tests for Model.query_n_times."""
 
     def test_returns_numpy_array(self, model_instance) -> None:
         """query_n_times() returns a numpy array."""
@@ -241,8 +241,8 @@ class TestModelInstanceQueryNTimes:
             assert isinstance(item, str)
 
 
-class TestModelInstanceQueryLogProbs:
-    """Tests for ModelInstance.query_log_probs."""
+class TestModelQueryLogProbs:
+    """Tests for Model.query_log_probs."""
 
     def test_returns_llmtokendata(self, low_level_model) -> None:
         """query_log_probs() returns an LLMTokenData instance."""
@@ -264,13 +264,13 @@ class TestModelInstanceQueryLogProbs:
 
     def test_probs_are_exp_of_sampled_token_logprobs(self, low_level_model) -> None:
         """Each probability equals exp(log-prob) of the corresponding sampled token."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         mock_rng = MagicMock()
         mock_rng.gumbel.return_value = np.zeros(4)
         with patch('problm_solver.llama_interface.resolve_rng', return_value=mock_rng):
             result = low_level_model.query_log_probs()
-        lp = ModelInstance._log_softmax(np.array([0.0, 3.0, 1.0, -2.0], dtype=np.float32))
+        lp = Model._log_softmax(np.array([0.0, 3.0, 1.0, -2.0], dtype=np.float32))
         assert result.probs == pytest.approx([float(np.exp(lp[1]))])
 
     def test_probs_are_between_zero_and_one(self, low_level_model) -> None:
@@ -307,8 +307,8 @@ class TestModelInstanceQueryLogProbs:
         assert len(result.tokens) == 1
 
 
-class TestModelInstanceGenerateData:
-    """Tests for ModelInstance.generate_data."""
+class TestModelGenerateData:
+    """Tests for Model.generate_data."""
 
     def test_returns_llmoutputdata(self, model_instance) -> None:
         """generate_data() returns an LLMOutputData instance."""
@@ -335,8 +335,8 @@ class TestModelInstanceGenerateData:
         assert result.written is False
 
 
-class TestModelInstanceQueryBranch:
-    """Tests for ModelInstance.query_branch."""
+class TestModelQueryBranch:
+    """Tests for Model.query_branch."""
 
     # Vocabulary size and EOS token ID used across the fixture and tests.
     _VOCAB = 5
@@ -410,15 +410,15 @@ class TestModelInstanceQueryBranch:
 
     def test_sums_log_probs_of_generated_tokens(self, branch_model) -> None:
         """Return value equals the sum of log-probs of the sampled tokens."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         # With Gumbel noise = 0, sampling is greedy: argmax of logprobs.
         # Step 1: scores[2], argmax = 1 (logit 3.0)
         # Step 2: scores[3], argmax = 2 (logit 2.0)
-        lp1 = float(ModelInstance._log_softmax(
+        lp1 = float(Model._log_softmax(
             np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
         )[1])
-        lp2 = float(ModelInstance._log_softmax(
+        lp2 = float(Model._log_softmax(
             np.array([0.5, 0.5, 2.0, 0.2, -2.0], dtype=np.float32)
         )[2])
         mock_rng = MagicMock()
@@ -438,11 +438,11 @@ class TestModelInstanceQueryBranch:
 
     def test_eos_log_prob_not_included_in_sum(self, branch_model) -> None:
         """The log-probability of the EOS token itself is not added to the total."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         # Step 1 generates token 1 (non-EOS); step 2 generates EOS.
         branch_model._llm.scores[3] = [-10.0, -10.0, -10.0, -10.0, 10.0]  # EOS argmax
-        lp1 = float(ModelInstance._log_softmax(
+        lp1 = float(Model._log_softmax(
             np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
         )[1])
         mock_rng = MagicMock()
@@ -498,8 +498,8 @@ class TestModelInstanceQueryBranch:
         assert branch_model._llm.eval.call_count == 4
 
 
-class TestModelInstanceQueryBranchesFromLiveBatch:
-    """Tests for ModelInstance.query_branches_from_live_batch.
+class TestModelQueryBranchesFromLiveBatch:
+    """Tests for Model.query_branches_from_live_batch.
 
     The batched path generates ``n_branches`` independent branches in lockstep
     from the currently loaded live (seq-0) state, using multi-sequence
@@ -577,12 +577,12 @@ class TestModelInstanceQueryBranchesFromLiveBatch:
 
     def test_sums_log_probs_of_generated_tokens(self, batch_model) -> None:
         """Each branch's log-prob equals the sum of per-step sampled log-probs."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
-        lp1 = float(ModelInstance._log_softmax(
+        lp1 = float(Model._log_softmax(
             np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
         )[1])
-        lp2 = float(ModelInstance._log_softmax(
+        lp2 = float(Model._log_softmax(
             np.array([0.5, 0.5, 2.0, 0.2, -2.0], dtype=np.float32)
         )[2])
         with patch('problm_solver.llama_interface.resolve_rng',
@@ -603,15 +603,15 @@ class TestModelInstanceQueryBranchesFromLiveBatch:
 
     def test_stops_at_max_tokens_without_eos(self, batch_model) -> None:
         """A full-depth run with no EOS sums exactly max_tokens log-probs."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
-        lp1 = float(ModelInstance._log_softmax(
+        lp1 = float(Model._log_softmax(
             np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
         )[1])
-        lp2 = float(ModelInstance._log_softmax(
+        lp2 = float(Model._log_softmax(
             np.array([0.5, 0.5, 2.0, 0.2, -2.0], dtype=np.float32)
         )[2])
-        lp3 = float(ModelInstance._log_softmax(
+        lp3 = float(Model._log_softmax(
             np.array([2.0, 0.5, 0.5, 0.2, -2.0], dtype=np.float32)
         )[0])
         with patch('problm_solver.llama_interface.resolve_rng',
@@ -629,11 +629,11 @@ class TestModelInstanceQueryBranchesFromLiveBatch:
         instead asserts the accumulated value is just step-0's log-prob when
         step 1 is EOS.
         """
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         # step 1 (position 3) argmax = EOS
         batch_model._llm.scores[3] = [-10.0, -10.0, -10.0, -10.0, 10.0]
-        lp1 = float(ModelInstance._log_softmax(
+        lp1 = float(Model._log_softmax(
             np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
         )[1])
         with patch('problm_solver.llama_interface.resolve_rng',
@@ -713,7 +713,7 @@ class TestModelInstanceQueryBranchesFromLiveBatch:
 
 
 class TestQueryLogProbsNextToken:
-    """Tests for ModelInstance.query_log_probs_next_token."""
+    """Tests for Model.query_log_probs_next_token."""
 
     @pytest.fixture
     def next_token_model(self, model_instance):
@@ -777,7 +777,7 @@ class TestQueryLogProbsNextToken:
 
 
 class TestFormatChatPrompt:
-    """Tests for ModelInstance._format_chat_prompt."""
+    """Tests for Model._format_chat_prompt."""
 
     @pytest.fixture
     def chat_prompt_model(self, model_instance):
@@ -843,68 +843,68 @@ class TestFormatChatPrompt:
 
 
 class TestLogSoftmax:
-    """Tests for ModelInstance._log_softmax."""
+    """Tests for Model._log_softmax."""
 
     def test_output_is_valid_log_probability_distribution(self) -> None:
         """exp(log_softmax(x)) sums to 1.0 over the full vocabulary."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         logits = np.array([1.0, 2.0, 0.5, -1.0], dtype=np.float32)
-        result = ModelInstance._log_softmax(logits)
+        result = Model._log_softmax(logits)
         assert np.exp(result).sum() == pytest.approx(1.0)
 
     def test_argmax_is_preserved(self) -> None:
         """The token with the highest logit has the highest log-probability."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         logits = np.array([0.1, 3.0, -1.0, 0.5], dtype=np.float32)
-        result = ModelInstance._log_softmax(logits)
+        result = Model._log_softmax(logits)
         assert np.argmax(result) == np.argmax(logits)
 
     def test_all_values_are_non_positive(self) -> None:
         """All log-probabilities are ≤ 0 (probabilities are in (0, 1])."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         logits = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        result = ModelInstance._log_softmax(logits)
+        result = Model._log_softmax(logits)
         assert np.all(result <= 0.0)
 
     def test_returns_float64_array(self) -> None:
         """Output dtype is float64 regardless of the input dtype."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         logits = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        result = ModelInstance._log_softmax(logits)
+        result = Model._log_softmax(logits)
         assert result.dtype == np.float64
 
     def test_output_shape_matches_input(self) -> None:
         """Output array has the same shape as the input logits."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         logits = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float32)
-        result = ModelInstance._log_softmax(logits)
+        result = Model._log_softmax(logits)
         assert result.shape == logits.shape
 
     def test_numerically_stable_with_large_logits(self) -> None:
         """Does not overflow when logits are in the hundreds, as is common for LLMs."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         logits = np.array([300.0, 200.0, 100.0], dtype=np.float32)
-        result = ModelInstance._log_softmax(logits)
+        result = Model._log_softmax(logits)
         assert np.all(np.isfinite(result))
         assert np.exp(result).sum() == pytest.approx(1.0)
 
     def test_uniform_logits_produce_equal_log_probs(self) -> None:
         """All-equal logits map to the same log-probability for every token."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         logits = np.full(5, 2.0, dtype=np.float32)
-        result = ModelInstance._log_softmax(logits)
+        result = Model._log_softmax(logits)
         assert np.allclose(result, result[0])
 
 
 class TestTopKIdsFromLogprobs:
-    """Tests for ModelInstance._top_k_ids_from_logprobs."""
+    """Tests for Model._top_k_ids_from_logprobs."""
 
     def test_returns_exactly_n_entries(self, model_instance) -> None:
         """The returned list has exactly n entries."""
@@ -965,7 +965,7 @@ class TestTopKIdsFromLogprobs:
 
 @pytest.fixture
 def gen_adj_model(model_instance):
-    """ModelInstance with all generate_adjusted() dependencies mocked.
+    """Model with all generate_adjusted() dependencies mocked.
 
     - _format_chat_prompt returns [10, 20, 30] (prompt_length = 3)
     - vocab_size = 4; EOS = token 0
@@ -1012,7 +1012,7 @@ def gen_adj_model(model_instance):
 
 
 class TestGenerateAdjusted:
-    """Tests for ModelInstance.generate_adjusted."""
+    """Tests for Model.generate_adjusted."""
 
     def test_returns_llmoutputdatafull(self, gen_adj_model) -> None:
         """generate_adjusted() returns an LLMOutputDataFull instance."""
@@ -1044,12 +1044,12 @@ class TestGenerateAdjusted:
 
     def test_adjust_fn_receives_top_k_tokens(self, gen_adj_model) -> None:
         """adjust_fn receives a GenerationContext whose token_probs is built from scores."""
-        from problm_solver.llama_interface import ModelInstance
+        from problm_solver.llama_interface import Model
 
         adjust_fn = MagicMock(return_value=id_logprobs_to_candidate_tokens({1: -0.5}))
         gen_adj_model.generate_adjusted(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=1)
         ctx = adjust_fn.call_args[0][0]
-        lp = ModelInstance._log_softmax(np.array([-10.0, 3.0, 1.0, 0.5], dtype=np.float32))
+        lp = Model._log_softmax(np.array([-10.0, 3.0, 1.0, 0.5], dtype=np.float32))
         assert ctx.token_id_probs.candidate_ids.tolist() == [1, 2]
         assert ctx.token_id_probs.candidate_logprobs.tolist() == pytest.approx([float(lp[1]), float(lp[2])])
 
@@ -1143,7 +1143,7 @@ class TestGenerateAdjusted:
 
 
 class TestSampleTokenAdjusted:
-    """Tests for ModelInstance.sample_token_adjusted."""
+    """Tests for Model.sample_token_adjusted."""
 
     @pytest.fixture
     def one_step_model(self, model_instance):

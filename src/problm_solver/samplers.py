@@ -24,7 +24,7 @@ class GenerationContext:
 
     Injected by ``generate_adjusted()`` so that adjustment functions can
     access model-querying capabilities without a direct dependency on
-    ``ModelInstance``. All mutable fields are defensive copies.
+    ``Model``. All mutable fields are defensive copies.
 
     :param token_id_probs: Current top-k candidate token IDs and log-probabilities.
     :param prev_probs: Normalized probabilities of all previously selected

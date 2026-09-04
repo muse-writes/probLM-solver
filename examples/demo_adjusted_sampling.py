@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from problm_solver.samplers import SampleLowTemp, adjust_identity
-from problm_solver.llama_interface import ModelInstance
+from problm_solver.llama_interface import Model
 
 MODEL = Path.home() / '.problm-solver' / 'models' / 'Qwen3.5-0.8B-Q4_K_M.gguf'
 PROMPT = 'Why is the sky blue?'
@@ -11,7 +11,7 @@ TOP_K, TOP_P, MAX_TOKENS, ALPHA = 40, 0.9, 128, 2.0
 
 # logits_all=True is required by generate_adjusted() (it raises otherwise).
 # n_ctx must hold the formatted prompt + max_tokens.
-model = ModelInstance(
+model = Model(
     fname=str(MODEL),
     context=PROMPT,
     n_ctx=2048,

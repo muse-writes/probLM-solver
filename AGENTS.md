@@ -55,7 +55,7 @@ probLM-solver/
 
 ### Dependency Direction
 ```
-cli.py → ModelInstance (llama_interface.py) → LLMOutputData / LLMTokenData / LLMNextTokenData / LLMOutputDataFull / Hyperparams (data.py)
+cli.py → Model (llama_interface.py) → LLMOutputData / LLMTokenData / LLMNextTokenData / LLMOutputDataFull / Hyperparams (data.py)
                                              → LlamaTokenizer (analysis/tokenizer.py)
                                              → prob_of_token, sample_from_logprobs (analysis/probabilities.py)
                                              → AdjustFn, GenerationContext (samplers.py)
@@ -74,7 +74,7 @@ cli.py → TqdmHandler (utils.py)
 ### Data Flow
 1. User selects a GGUF model file from `~/.problm-solver/models/`
 2. User enters a prompt, then selects a function (1–4)
-3. `ModelInstance` is created; `logits_all=True` for functions 2, 3, and 4
+3. `Model` is created; `logits_all=True` for functions 2, 3, and 4
 4. **Text responses** (1): `model.generate_data(n)` → `LLMOutputData`; saved to `responses/`
 5. **Token + probability responses** (2): `model.query_log_probs()` → `LLMTokenData`; saved to `probabilities/`
 6. **Low-temperature generation** (3): `model.generate_adjusted(top_k, top_p, SampleLowTemp(alpha), max_tokens, alpha=alpha)` → `LLMOutputDataFull`; saved to `responses/`
@@ -115,7 +115,7 @@ cli.py → TqdmHandler (utils.py)
 - **Total tests**: 225
 - **Doctests**: `WordTokenizer` and `LlamaTokenizer` have inline doctests collected by `--doctest-modules`
 - **Mocking**:
-  - `llama_cpp.Llama` is patched at construction time in all `ModelInstance` tests; `_make_llama_mock` provides metadata and `n_ctx` so `__init__`'s cache-sizing logic runs correctly
+  - `llama_cpp.Llama` is patched at construction time in all `Model` tests; `_make_llama_mock` provides metadata and `n_ctx` so `__init__`'s cache-sizing logic runs correctly
   - `llama_cpp.LlamaRAMCache` is patched in `test_cache_sized_from_model_metadata`
   - `Jinja2ChatFormatter` is patched at `problm_solver.llama_interface.Jinja2ChatFormatter` in `TestFormatChatPrompt`
   - Low-level `eval`/`scores`/`save_state`/`load_state` methods are mocked with `side_effect` functions that maintain `n_tokens` state, mirroring real llama_cpp behaviour; `scores` is a real numpy array with known values at the relevant `n_tokens - 1` row
