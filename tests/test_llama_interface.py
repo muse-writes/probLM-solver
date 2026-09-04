@@ -132,9 +132,6 @@ class TestKVUnifiedContextShim:
         shim.assert_called_once_with(enabled=False)
 
 
-class TestModelQuery:
-    """Tests for Model.query."""
-
 @pytest.fixture
 def low_level_model(model):
     """Extend model with low-level eval state for Phase 5 tests.
