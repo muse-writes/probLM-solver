@@ -40,7 +40,7 @@ A simple script for setting up a model, and generating a response with low-tempe
    :linenos:
    :name: low-temp
 
-   from problm_solver.adjust_probs import SampleLowTemp
+   from problm_solver.samplers import SampleLowTemp
    from problm_solver.llama_interface import ModelInstance
 
    temp = 0.5
@@ -98,7 +98,7 @@ See the following example:
    :linenos:
    :name: sample-token
 
-   from problm_solver.adjust_probs import SampleLowTemp
+   from problm_solver.samplers import SampleLowTemp
    from problm_solver.llama_interface import ModelInstance
 
    temp = 0.5
@@ -131,7 +131,7 @@ Let's start with the code snippet below. In this example we use the built-in Met
    :linenos:
    :name: power-dist
 
-   from problm_solver.adjust_probs import MetropolisSampler, SamplePowerDist
+   from problm_solver.samplers import MetropolisSampler, SamplePowerDist
    from problm_solver.llama_interface import ModelInstance
 
    temp = 0.5
@@ -151,7 +151,7 @@ Let's start with the code snippet below. In this example we use the built-in Met
        max_tokens=128
    )
 
-probLM-solver *again* implements the sampling function as a callable class, in ``problm_solver.adjust_probs.SamplePowerDist``.
+probLM-solver *again* implements the sampling function as a callable class, in ``problm_solver.samplers.SamplePowerDist``.
 This takes three main parameters:
 
 - ``alpha``, which you are already familiar with;
@@ -166,7 +166,7 @@ A second built-in option is token-level beam expansion:
 
 .. sourcecode:: python
 
-   from problm_solver.adjust_probs import BeamSampler, SamplePowerDist
+   from problm_solver.samplers import BeamSampler, SamplePowerDist
 
    sampling_func = SamplePowerDist(
        alpha=2.0,
@@ -235,7 +235,7 @@ A user who has made the class ``MySampler``, can now pass it to an instance of `
    :linenos:
    :name: power-sampler
 
-   from problm_solver.adjust_probs import BranchSampler, SamplePowerDist
+   from problm_solver.samplers import BranchSampler, SamplePowerDist
 
    class MySampler(BranchSampler):
        ...
@@ -250,7 +250,7 @@ Let's explore a hypothetical greedy branch sampler. It might be defined in the f
    :linenos:
    :name: greedy-sampler
 
-   from problm_solver.adjust_probs import BranchSampler, SamplePowerDist
+   from problm_solver.samplers import BranchSampler, SamplePowerDist
 
    class MyGreedySampler(BranchSampler):
        """My greedy sampler, always picks the most probable branch."""

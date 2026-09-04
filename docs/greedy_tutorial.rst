@@ -40,7 +40,7 @@ The sampler
    :name: greedy-fn
 
    import numpy as np
-   from problm_solver.adjust_probs import CandidateTokens, GenerationContext
+   from problm_solver.samplers import CandidateTokens, GenerationContext
 
    def greedy(context: GenerationContext) -> CandidateTokens:
        """Always pick the single most-probable candidate token."""

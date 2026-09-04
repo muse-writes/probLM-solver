@@ -22,7 +22,7 @@ Minimal reproducible script
 
    from pathlib import Path
 
-   from problm_solver.adjust_probs import SampleLowTemp, adjust_identity
+   from problm_solver.samplers import SampleLowTemp, adjust_identity
    from problm_solver.llama_interface import ModelInstance
    from problm_solver.random import RandomManager
 

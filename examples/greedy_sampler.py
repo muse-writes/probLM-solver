@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from problm_solver.adjust_probs import AdjustFn, GenerationContext
+from problm_solver.samplers import AdjustFn, GenerationContext
 from problm_solver.candidates import CandidateTokens
 from problm_solver.llama_interface import ModelInstance
 

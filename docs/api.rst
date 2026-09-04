@@ -35,11 +35,11 @@ Probability adjustment
 ----------------------
 
 Adjustment functions and MCMC samplers used by the adjusted-generation
-pipeline, including the :class:`~problm_solver.adjust_probs.BranchSampler`
-abstract base class and its :class:`~problm_solver.adjust_probs.MetropolisSampler`
+pipeline, including the :class:`~problm_solver.samplers.BranchSampler`
+abstract base class and its :class:`~problm_solver.samplers.MetropolisSampler`
 implementation.
 
-.. automodule:: problm_solver.adjust_probs
+.. automodule:: problm_solver.samplers
    :members:
    :show-inheritance:
 

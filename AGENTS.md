@@ -16,7 +16,7 @@
 probLM-solver/
 ├── src/problm_solver/          # Main source code (installed as `problm_solver`)
 │   ├── __init__.py              # Package initialisation (empty docstring)
-│   ├── adjust_probs.py          # GenerationContext, AdjustFn, adjustment functions, BranchSampler hierarchy
+│   ├── samplers.py          # GenerationContext, AdjustFn, adjustment functions, BranchSampler hierarchy
 │   ├── cli.py                   # Command line interface
 │   ├── constants.py             # Memory-size constants (KIB, MIB, GIB)
 │   ├── llama_interface.py       # llama.cpp wrapper interface
@@ -33,7 +33,7 @@ probLM-solver/
 │   ├── test_cli.py              # Tests for cli.py
 │   ├── test_llama_interface.py  # Tests for llama_interface.py
 │   ├── test_probabilities.py    # Tests for analysis/probabilities.py
-│   └── test_adjust_probs.py    # Tests for adjust_probs.py
+│   └── test_samplers.py    # Tests for samplers.py
 ├── docs/
 │   ├── index.md                 # MkDocs landing page (legacy, kept in place)
 │   ├── conf.py                  # Sphinx configuration
@@ -58,11 +58,11 @@ probLM-solver/
 cli.py → ModelInstance (llama_interface.py) → LLMOutputData / LLMTokenData / LLMNextTokenData / LLMOutputDataFull / Hyperparams (data.py)
                                              → LlamaTokenizer (analysis/tokenizer.py)
                                              → prob_of_token, sample_from_logprobs (analysis/probabilities.py)
-                                             → AdjustFn, GenerationContext (adjust_probs.py)
-cli.py → SampleLowTemp, SamplePowerDist, MetropolisSampler (adjust_probs.py)
+                                             → AdjustFn, GenerationContext (samplers.py)
+cli.py → SampleLowTemp, SamplePowerDist, MetropolisSampler (samplers.py)
 cli.py → LLMOutputData (data.py)
-adjust_probs.py → _as_rng (utils.py)
-adjust_probs.py → prob_of_token (analysis/probabilities.py)
+samplers.py → _as_rng (utils.py)
+samplers.py → prob_of_token (analysis/probabilities.py)
 analysis/probabilities.py → _as_rng (utils.py)
 analysis/tokenizer.py → (no intra-package deps)
 data.py → (no intra-package deps)
@@ -111,7 +111,7 @@ cli.py → TqdmHandler (utils.py)
 - **Coverage**: Minimum 50% (`fail_under = 50`)
 - **Options**: Exit on first failure, verbose (v=2), JUnit XML reports
 - **Paths**: `src/`, `tests/`
-- **Test files**: `test_import.py`, `test_data.py`, `test_cli.py`, `test_llama_interface.py`, `test_probabilities.py`, `test_adjust_probs.py`
+- **Test files**: `test_import.py`, `test_data.py`, `test_cli.py`, `test_llama_interface.py`, `test_probabilities.py`, `test_samplers.py`
 - **Total tests**: 225
 - **Doctests**: `WordTokenizer` and `LlamaTokenizer` have inline doctests collected by `--doctest-modules`
 - **Mocking**:
@@ -122,7 +122,7 @@ cli.py → TqdmHandler (utils.py)
   - Tests that check **exact log-prob or probability values** and require deterministic token selection must patch `problm_solver.llama_interface._as_rng` to return a `MagicMock` whose `.gumbel` returns `np.zeros(vocab_size)`. **Do not** use `patch('numpy.random.gumbel', ...)` — the code uses `numpy.random.Generator.gumbel` (new-style API), which is unaffected by that patch. Tests that only check structure, counts, or types do not need gumbel control.
   - `_format_chat_prompt`, `sample_from_logprobs`, and `prob_of_token` are all patched in the `gen_adj_model` fixture via `contextlib.ExitStack`
   - `adjust_fn` receives a `GenerationContext`; `MagicMock.call_args_list` inspection reads `.prev_probs` from the context object
-  - `GenerationContext` fixtures in `test_adjust_probs.py` supply a `query_branch=MagicMock(return_value=-1.5)` field
+  - `GenerationContext` fixtures in `test_samplers.py` supply a `query_branch=MagicMock(return_value=-1.5)` field
   - `mock_sampler` in `TestSamplePowerDistCall` sets `future_logprob.return_value = 0.0` so output values are Python `float` rather than `MagicMock`
   - CLI filesystem interactions use `monkeypatch` against `tmp_path`
 
@@ -153,9 +153,9 @@ These are recurring sources of bugs in this codebase that an agent should be awa
 
 3. **Save/restore around `adjust_fn`** (`llama_interface.py`): `SamplePowerDist` calls `query_branch` internally, which calls `reset()` + `eval()` on the shared `_llm`. This corrupts the KV-cache state. `generate_adjusted` saves state immediately before `adjust_fn(ctx)` and restores it immediately after, so the subsequent incremental `eval(token_ids)` always appends to the correct generation context.
 
-4. **`past_lp` is a constant shift** (`adjust_probs.py`): In `SamplePowerDist.__call__`, `past_lp = alpha * sum(log(prev_probs))` is computed once and added to every candidate's score. Because `sample_from_logprobs` and `prob_of_token` both apply shift-invariant softmax (`lp -= lp.max()`), `past_lp` has no effect on which token is selected or on the stored per-token probabilities.
+4. **`past_lp` is a constant shift** (`samplers.py`): In `SamplePowerDist.__call__`, `past_lp = alpha * sum(log(prev_probs))` is computed once and added to every candidate's score. Because `sample_from_logprobs` and `prob_of_token` both apply shift-invariant softmax (`lp -= lp.max()`), `past_lp` has no effect on which token is selected or on the stored per-token probabilities.
 
-5. **`future_logprob` discards burn-in samples** (`adjust_probs.py`): `MetropolisSampler.future_logprob` uses only `branch_log_probs[equil_branches:]`. With default settings the minimum number of post-equilibration samples is 2, giving a high-variance estimate. This is intentional (burn-in removal) but means the branch estimate quality is sensitive to `equil_branches` and `max_branches`.
+5. **`future_logprob` discards burn-in samples** (`samplers.py`): `MetropolisSampler.future_logprob` uses only `branch_log_probs[equil_branches:]`. With default settings the minimum number of post-equilibration samples is 2, giving a high-variance estimate. This is intentional (burn-in removal) but means the branch estimate quality is sensitive to `equil_branches` and `max_branches`.
 
 6. **`numpy.random.gumbel` patch does not reach `Generator.gumbel`**: The codebase uses `np.random.default_rng(seed).gumbel(...)` (new-style Generator API). Patching `numpy.random.gumbel` targets the legacy API and has no effect. Tests that need deterministic sampling must patch `problm_solver.llama_interface._as_rng`.
 
@@ -171,7 +171,7 @@ These are recurring sources of bugs in this codebase that an agent should be awa
 
 4. **`FBT001` on `_LlamaInterface` protocol** (`analysis/tokenizer.py`): `add_bos: bool` and `special: bool` are flagged as boolean positional arguments. These mirror the external `llama_cpp.Llama` API and cannot be made keyword-only.
 
-5. **Equilibration period not user-configurable** (`adjust_probs.py`): `should_continue()` discards `branch_log_probs[:equil_branches]` as a fixed equilibration period. Whether this is the right threshold, and whether users should be able to control it separately from `equil_branches`, is an open design question (TODO in source).
+5. **Equilibration period not user-configurable** (`samplers.py`): `should_continue()` discards `branch_log_probs[:equil_branches]` as a fixed equilibration period. Whether this is the right threshold, and whether users should be able to control it separately from `equil_branches`, is an open design question (TODO in source).
 
 6. **`top_p` stubbed** (`llama_interface.py`): resolved — see below.
 

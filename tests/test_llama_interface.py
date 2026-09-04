@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, call, patch
 import numpy as np
 import pytest
 
-from problm_solver.adjust_probs import id_logprobs_to_candidate_tokens
 from problm_solver.data import LLMNextTokenData, LLMOutputData, LLMOutputDataFull
+from problm_solver.samplers import id_logprobs_to_candidate_tokens
 
 
 def _make_llama_mock(response_text: str = 'Mock response.') -> MagicMock:

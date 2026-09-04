@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from problm_solver.adjust_probs import SampleLowTemp, adjust_identity
+from problm_solver.samplers import SampleLowTemp, adjust_identity
 from problm_solver.llama_interface import ModelInstance
 
 MODEL = Path.home() / '.problm-solver' / 'models' / 'Qwen3.5-0.8B-Q4_K_M.gguf'

@@ -16,7 +16,6 @@ from llama_cpp import Llama, LlamaRAMCache, LlamaState
 from llama_cpp.llama_chat_format import Jinja2ChatFormatter
 from tqdm import tqdm
 
-from problm_solver.adjust_probs import AdjustFn, GenerationContext
 from problm_solver.analysis.probabilities import prob_of_token, sample_from_logprobs  # noqa: F401
 from problm_solver.candidates import CandidateGeneratorFactory, CandidateTokens
 from problm_solver.data import (
@@ -28,6 +27,7 @@ from problm_solver.data import (
 )
 from problm_solver.llama_lowlevel import ModelBackendGeneric, ModelCBackend
 from problm_solver.random import RNGLike, resolve_rng
+from problm_solver.samplers import AdjustFn, GenerationContext
 
 # -- Module-wide setup -- #
 
@@ -122,7 +122,7 @@ class ModelInstance:
             bytes_per_state = n_ctx × 2 × n_layers × n_kv_heads × head_dim × 2
 
         Four states comfortably accommodates the save/restore pattern used by
-        :class:`~problm_solver.adjust_probs.SamplePowerDist`: the saved
+        :class:`~problm_solver.samplers.SamplePowerDist`: the saved
         pre-branch snapshot, the current working state, and spare capacity
         for shared prefix entries.
 
@@ -147,7 +147,7 @@ class ModelInstance:
             context with a unified KV-cache pool so that multi-sequence batched
             decoding works — required by
             :meth:`query_branches_from_live_batch` (and thus the batched
-            proposal path in :class:`~problm_solver.adjust_probs.SamplePowerDist`).
+            proposal path in :class:`~problm_solver.samplers.SamplePowerDist`).
             With the default partitioned pool the context supports only
             sequence id 0, so batched branch decoding would fail with
             ``llama_decode`` error ``-1``. Disable only if you do not use

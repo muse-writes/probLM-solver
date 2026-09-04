@@ -1,11 +1,11 @@
-"""Tests for adjust_probs.py."""
+"""Tests for samplers.py."""
 
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-from problm_solver.adjust_probs import (
+from problm_solver.samplers import (
     AdjustFn,
     BeamSampler,
     BranchSampler,

@@ -56,7 +56,7 @@ Finally, the modules themselves can be imported and assigned to R variables. For
 .. sourcecode:: r
 
    llama <- import("problm_solver.llama_interface")
-   adj <- import("problm_solver.adjust_probs")
+   adj <- import("problm_solver.samplers")
 
 Using the API in R
 ------------------
