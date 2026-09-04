@@ -19,7 +19,7 @@ _logger = logging.getLogger(__name__)
 
 
 @dataclass
-class GenerationContext:
+class SamplerContext:
     """All information available to an :data:`AdjustFn` at each generation step.
 
     Injected by ``generate_with_sampler()`` so that adjustment functions can
@@ -60,9 +60,9 @@ class GenerationContext:
     query_branches_from_live_batch: Callable[[int, int], npt.NDArray[np.float64]] | None = None
 
 
-# Callable that receives a GenerationContext and returns adjusted
+# Callable that receives a SamplerContext and returns adjusted
 # token-ID candidates with log-probabilities.
-type AdjustFn = Callable[[GenerationContext], CandidateTokens]
+type AdjustFn = Callable[[SamplerContext], CandidateTokens]
 
 
 def candidate_tokens_to_id_logprobs(candidates: CandidateTokens) -> dict[int, float]:
@@ -91,7 +91,7 @@ def id_logprobs_to_candidate_tokens(id_logprobs: dict[int, float]) -> CandidateT
     return CandidateTokens(candidate_ids=ids, candidate_logprobs=lps)
 
 
-def adjust_identity(context: GenerationContext) -> CandidateTokens:
+def adjust_identity(context: SamplerContext) -> CandidateTokens:
     """Return token log-probabilities unchanged in token-ID space."""
     return context.token_id_probs
 
@@ -136,7 +136,7 @@ class SampleLowTemp:
         """
         self.alpha = alpha
 
-    def __call__(self, context: GenerationContext) -> CandidateTokens:
+    def __call__(self, context: SamplerContext) -> CandidateTokens:
         """Apply per-step power-scaling adjustment to the current token-ID distribution."""
         candidate_ids = context.token_id_probs.candidate_ids
         lp = context.token_id_probs.candidate_logprobs.astype(np.float64, copy=True)
@@ -424,7 +424,7 @@ class SamplePowerDist:
     injected :class:`BranchSampler` (e.g. Metropolis-Hastings), continuing
     until :meth:`~BranchSampler.should_continue` signals convergence. Each
     branch is evaluated in a single model call via
-    :attr:`~GenerationContext.query_branch`, rather than token-by-token. The
+    :attr:`~SamplerContext.query_branch`, rather than token-by-token. The
     accepted branch log-probabilities are kept as a ``numpy`` array and
     combined with the current token's log-probability via log-sum-exp to
     produce the adjusted distribution.
@@ -523,10 +523,10 @@ class SamplePowerDist:
         )
 
     @staticmethod
-    def _require_live_callables(context: GenerationContext, what: str) -> None:
+    def _require_live_callables(context: SamplerContext, what: str) -> None:
         """Raise ``ValueError`` if any shared live-state callable is missing.
 
-        :param context: The generation context to inspect.
+        :param context: The sampler context object to inspect.
         :param what: Human-readable label for the calling path, used in the
             error message.
         """
@@ -536,18 +536,18 @@ class SamplePowerDist:
             or context.load_live_state is None
             or context.eval_tokens is None
         ):
-            msg = f'{what} requires live-state callables in GenerationContext'
+            msg = f'{what} requires live-state callables in SamplerContext'
             raise ValueError(msg)
 
     def _make_beam_scorer(
-        self, context: GenerationContext
+        self, context: SamplerContext
     ) -> Callable[[int], np.float64]:
         """Build a per-candidate scorer using token-level beam expansion.
 
         :raises ValueError: if the token-beam live-state callables are missing.
         """
         if context.query_next_ids_from_live is None:
-            msg = 'Token-beam sampler requires live-state callables in GenerationContext'
+            msg = 'Token-beam sampler requires live-state callables in SamplerContext'
             raise ValueError(msg)
         self._require_live_callables(context, 'Token-beam sampler')
 
@@ -566,7 +566,7 @@ class SamplePowerDist:
         return score_future_from_candidate_id
 
     def _make_batched_branch_scorer(
-        self, context: GenerationContext
+        self, context: SamplerContext
     ) -> Callable[[int], np.float64] | None:
         """Build a per-candidate scorer using one batched proposal pass per candidate.
 
@@ -602,7 +602,7 @@ class SamplePowerDist:
         return score_future_from_candidate_id
 
     def _make_live_branch_scorer(
-        self, context: GenerationContext
+        self, context: SamplerContext
     ) -> Callable[[int], np.float64] | None:
         """Build a per-candidate scorer that proposes branches one at a time from live state.
 
@@ -640,7 +640,7 @@ class SamplePowerDist:
         return score_future_from_candidate_id
 
     def _make_context_branch_scorer(
-        self, context: GenerationContext
+        self, context: SamplerContext
     ) -> Callable[[int], np.float64]:
         """Build a per-candidate scorer using token-ID context branches (no live state)."""
         context_tokens = context.context_tokens
@@ -656,7 +656,7 @@ class SamplePowerDist:
         return score_future_from_candidate_id
 
     def _make_branch_scorer(
-        self, context: GenerationContext
+        self, context: SamplerContext
     ) -> Callable[[int], np.float64]:
         """Select the best available branch-based per-candidate scorer.
 
@@ -669,10 +669,10 @@ class SamplePowerDist:
             or self._make_context_branch_scorer(context)
         )
 
-    def __call__(self, context: GenerationContext) -> CandidateTokens:
+    def __call__(self, context: SamplerContext) -> CandidateTokens:
         """Apply power-distribution adjustment using lookahead branch sampling.
 
-        :param context: The current generation context in token-ID space.
+        :param context: The current sampler context in token-ID space.
         :returns: Adjusted candidate token IDs with log-probabilities.
         """
         if self.branch_sampler.supports_token_beam:

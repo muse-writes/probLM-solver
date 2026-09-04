@@ -27,7 +27,7 @@ from problm_solver.data import (
 )
 from problm_solver.llama_lowlevel import ModelBackendGeneric, ModelCBackend
 from problm_solver.random import RNGLike, resolve_rng
-from problm_solver.samplers import AdjustFn, GenerationContext
+from problm_solver.samplers import AdjustFn, SamplerContext
 
 # -- Module-wide setup -- #
 
@@ -706,7 +706,7 @@ class Model:
         :param top_k: Number of top candidate tokens to retrieve at each
             step.
         :param top_p: Threshold total probability of retrieved tokens.
-        :param adjust_fn: Callable that receives a ``GenerationContext`` and
+        :param adjust_fn: Callable that receives a ``SamplerContext`` and
             returns adjusted candidate token IDs/log-probabilities as
             ``CandidateTokens``. Values do not need to be normalized.
         :param max_tokens: Maximum number of tokens to generate.
@@ -773,7 +773,7 @@ class Model:
                 adjusted_candidates = candidates
             else:
                 pre_adjust_state = self.save_live_state()
-                ctx = GenerationContext(
+                ctx = SamplerContext(
                     token_id_probs=candidates,
                     prev_probs=list(prev_probs),
                     context_tokens=list(context),
@@ -884,7 +884,7 @@ class Model:
         :param context_tokens: Optional explicit context token IDs to evaluate
             when rebuilding state.
         :param prev_probs: Optional previously sampled token probabilities,
-            passed through to ``GenerationContext``.
+            passed through to ``SamplerContext``.
         :param commit_token: Whether to append the sampled token to the live
             model state via ``decode(token_ids)`` when non-terminal.
         :returns: A dictionary containing candidate distributions before/after
@@ -931,7 +931,7 @@ class Model:
             token_logprob = float(candidates.candidate_logprobs[0])
         else:
             pre_adjust_state = self.save_live_state()
-            ctx = GenerationContext(
+            ctx = SamplerContext(
                 token_id_probs=candidates,
                 prev_probs=prev_prob_values,
                 context_tokens=(

@@ -87,9 +87,9 @@ class TestKVUnifiedContextShim:
 
     def test_shim_sets_kv_unified_true_within_context(self) -> None:
         """Inside the shim, the submodule binding Llama uses returns kv_unified=True."""
-        from problm_solver.llama_interface import _kv_unified_default_params
-
         import llama_cpp
+
+        from problm_solver.llama_interface import _kv_unified_default_params
 
         # llama.py does `import llama_cpp.llama_cpp as llama_cpp`, so Llama reads
         # llama_context_default_params off the SUBMODULE. That binding must be patched.
@@ -103,9 +103,9 @@ class TestKVUnifiedContextShim:
 
     def test_shim_disabled_is_transparent(self) -> None:
         """With enabled=False the shim leaves the submodule binding untouched."""
-        from problm_solver.llama_interface import _kv_unified_default_params
-
         import llama_cpp
+
+        from problm_solver.llama_interface import _kv_unified_default_params
 
         with _kv_unified_default_params(enabled=False):
             assert llama_cpp.llama_cpp.llama_context_default_params().kv_unified is False
@@ -1043,7 +1043,7 @@ class TestGenerateWithSampler:
         assert adjust_fn.call_count == 3
 
     def test_adjust_fn_receives_top_k_tokens(self, gen_smpl_model) -> None:
-        """adjust_fn receives a GenerationContext whose token_probs is built from scores."""
+        """adjust_fn receives a SamplerContext whose token_probs is built from scores."""
         from problm_solver.llama_interface import Model
 
         adjust_fn = MagicMock(return_value=id_logprobs_to_candidate_tokens({1: -0.5}))
@@ -1054,7 +1054,7 @@ class TestGenerateWithSampler:
         assert ctx.token_id_probs.candidate_logprobs.tolist() == pytest.approx([float(lp[1]), float(lp[2])])
 
     def test_adjust_fn_receives_empty_prev_probs_on_first_step(self, gen_smpl_model) -> None:
-        """adjust_fn receives a GenerationContext with empty prev_probs on the first step."""
+        """adjust_fn receives a SamplerContext with empty prev_probs on the first step."""
         adjust_fn = MagicMock(return_value=id_logprobs_to_candidate_tokens({1: -0.5}))
         gen_smpl_model.generate_with_sampler(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=1)
         ctx = adjust_fn.call_args_list[0][0][0]

@@ -111,7 +111,7 @@ Sampling Functions in R
 
 ``reticulate`` implicitly converts between Python and R callables, so to create a custom sampling function, you can define it as an R function, and use ``problm_solver``'s ``Model.generate_with_sampler()`` function as usual.
 
-Bear in mind that a sampling function takes a generic dataclass ``GenerationContext`` as an argument, so the R function will need to follow the following scheme
+Bear in mind that a sampling function takes a generic dataclass ``SamplerContext`` as an argument, so the R function will need to follow the following scheme
 
 .. sourcecode:: r
     :linenos:

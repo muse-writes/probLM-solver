@@ -24,7 +24,7 @@ The whole idea
 --------------
 
 An :data:`AdjustFn` is just a callable. It receives a
-:class:`GenerationContext` holding the current top-k candidate tokens and
+:class:`SamplerContext` holding the current top-k candidate tokens and
 their log-probabilities, and returns a :class:`CandidateTokens` whose
 log-probabilities will be renormalised and sampled from.
 
@@ -40,9 +40,9 @@ The sampler
    :name: greedy-fn
 
    import numpy as np
-   from problm_solver.samplers import CandidateTokens, GenerationContext
+   from problm_solver.samplers import CandidateTokens, SamplerContext
 
-   def greedy(context: GenerationContext) -> CandidateTokens:
+   def greedy(context: SamplerContext) -> CandidateTokens:
        """Always pick the single most-probable candidate token."""
        ids = context.token_id_probs.candidate_ids
        lps = context.token_id_probs.candidate_logprobs
@@ -82,7 +82,7 @@ collapse.
 What to say while presenting it
 -------------------------------
 
-- An :data:`AdjustFn` takes a :class:`GenerationContext`, returns
+- An :data:`AdjustFn` takes a :class:`SamplerContext`, returns
   :class:`CandidateTokens`. That is the whole contract.
 - ``context.token_id_probs`` already holds the filtered top-k candidates, so
   the sampler never touches the raw vocabulary.
