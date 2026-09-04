@@ -16,7 +16,6 @@ from llama_cpp import Llama, LlamaRAMCache, LlamaState
 from llama_cpp.llama_chat_format import Jinja2ChatFormatter
 from tqdm import tqdm
 
-from problm_solver.adjust_probs import AdjustFn, GenerationContext
 from problm_solver.analysis.probabilities import prob_of_token, sample_from_logprobs  # noqa: F401
 from problm_solver.candidates import CandidateGeneratorFactory, CandidateTokens
 from problm_solver.data import (
@@ -28,6 +27,7 @@ from problm_solver.data import (
 )
 from problm_solver.llama_lowlevel import ModelBackendGeneric, ModelCBackend
 from problm_solver.random import RNGLike, resolve_rng
+from problm_solver.samplers import AdjustFn, SamplerContext
 
 # -- Module-wide setup -- #
 
@@ -45,7 +45,7 @@ def _kv_unified_default_params(*, enabled: bool = True) -> Iterator[None]:
 
     ``llama-cpp-python``'s :class:`~llama_cpp.Llama` constructor does not
     expose ``kv_unified``, but multi-sequence batched decoding — used by
-    :meth:`ModelInstance.query_branches_from_live_batch` to generate parallel
+    :meth:`Model.query_branches_from_live_batch` to generate parallel
     branch proposals — requires a *unified* KV-cache pool. With the default
     partitioned pool (``kv_unified=False``) the context is created with
     ``n_seq_max=1``, so decoding into sequence ids > 0 is rejected with
@@ -97,7 +97,7 @@ _KV_UNIFIED_N_SEQ_MAX = 64
 
 # -- Main model instance -- #
 
-class ModelInstance:
+class Model:
     """Keeps a model instance and its context, with methods for querying the Llama instance."""
 
     def __init__( # noqa: PLR0913
@@ -122,7 +122,7 @@ class ModelInstance:
             bytes_per_state = n_ctx × 2 × n_layers × n_kv_heads × head_dim × 2
 
         Four states comfortably accommodates the save/restore pattern used by
-        :class:`~problm_solver.adjust_probs.SamplePowerDist`: the saved
+        :class:`~problm_solver.samplers.SamplePowerDist`: the saved
         pre-branch snapshot, the current working state, and spare capacity
         for shared prefix entries.
 
@@ -147,7 +147,7 @@ class ModelInstance:
             context with a unified KV-cache pool so that multi-sequence batched
             decoding works — required by
             :meth:`query_branches_from_live_batch` (and thus the batched
-            proposal path in :class:`~problm_solver.adjust_probs.SamplePowerDist`).
+            proposal path in :class:`~problm_solver.samplers.SamplePowerDist`).
             With the default partitioned pool the context supports only
             sequence id 0, so batched branch decoding would fail with
             ``llama_decode`` error ``-1``. Disable only if you do not use
@@ -299,7 +299,7 @@ class ModelInstance:
 
         EOS detection is the caller's responsibility: the EOS token will
         appear naturally in the returned distribution when the model prefers
-        it, and :meth:`generate_adjusted` stops the loop after the EOS token
+        it, and :meth:`generate_with_sampler` stops the loop after the EOS token
         ID is sampled.
 
         :param context_tokens: The current context as a list of integer token IDs.
@@ -684,7 +684,7 @@ class ModelInstance:
 
 ## -- Adjusting probabilities -- ##
 
-    def generate_adjusted(
+    def generate_with_sampler(
         self,
         top_k: int,
         top_p: float,
@@ -706,7 +706,7 @@ class ModelInstance:
         :param top_k: Number of top candidate tokens to retrieve at each
             step.
         :param top_p: Threshold total probability of retrieved tokens.
-        :param adjust_fn: Callable that receives a ``GenerationContext`` and
+        :param adjust_fn: Callable that receives a ``SamplerContext`` and
             returns adjusted candidate token IDs/log-probabilities as
             ``CandidateTokens``. Values do not need to be normalized.
         :param max_tokens: Maximum number of tokens to generate.
@@ -716,7 +716,7 @@ class ModelInstance:
         # Hyperparam and sampling setup.
         if not self._logits_all:
             msg = (
-                'generate_adjusted() requires logits_all=True when constructing ModelInstance '
+                'generate_with_sampler() requires logits_all=True when constructing Model '
                 'so per-token logits are available.'
             )
             raise ValueError(msg)
@@ -755,12 +755,12 @@ class ModelInstance:
         # Main generation loop.
         method_rng = resolve_rng(
             self._rng if rng is None else rng,
-            stream='llama.generate_adjusted',
+            stream='llama.generate_with_sampler',
         )
         reset_fn = getattr(adjust_fn, 'reset', None)
         if callable(reset_fn):
             cast('Callable[[], None]', reset_fn)()
-        for step in tqdm(range(max_tokens), desc='generate_adjusted', unit='tok'):
+        for step in tqdm(range(max_tokens), desc='generate_with_sampler', unit='tok'):
 
             # Determine logprobs and sample intersection of top-k and top-p.
             logprobs = self._log_softmax(self._llm_backend.last_logits())
@@ -773,7 +773,7 @@ class ModelInstance:
                 adjusted_candidates = candidates
             else:
                 pre_adjust_state = self.save_live_state()
-                ctx = GenerationContext(
+                ctx = SamplerContext(
                     token_id_probs=candidates,
                     prev_probs=list(prev_probs),
                     context_tokens=list(context),
@@ -851,7 +851,7 @@ class ModelInstance:
         )
 
 
-    def sample_token_adjusted(
+    def sample_token(
         self,
         top_k: int,
         top_p: float,
@@ -884,7 +884,7 @@ class ModelInstance:
         :param context_tokens: Optional explicit context token IDs to evaluate
             when rebuilding state.
         :param prev_probs: Optional previously sampled token probabilities,
-            passed through to ``GenerationContext``.
+            passed through to ``SamplerContext``.
         :param commit_token: Whether to append the sampled token to the live
             model state via ``decode(token_ids)`` when non-terminal.
         :returns: A dictionary containing candidate distributions before/after
@@ -892,8 +892,8 @@ class ModelInstance:
         """
         if not self._logits_all:
             msg = (
-                'sample_token_adjusted() requires logits_all=True when constructing '
-                'ModelInstance so per-token logits are available.'
+                'sample_token() requires logits_all=True when constructing '
+                'Model so per-token logits are available.'
             )
             raise ValueError(msg)
 
@@ -901,7 +901,7 @@ class ModelInstance:
 
         method_rng = resolve_rng(
             self._rng if rng is None else rng,
-            stream='llama.sample_token_adjusted',
+            stream='llama.sample_token',
         )
 
         state_source: str
@@ -931,7 +931,7 @@ class ModelInstance:
             token_logprob = float(candidates.candidate_logprobs[0])
         else:
             pre_adjust_state = self.save_live_state()
-            ctx = GenerationContext(
+            ctx = SamplerContext(
                 token_id_probs=candidates,
                 prev_probs=prev_prob_values,
                 context_tokens=(
@@ -1028,7 +1028,7 @@ class ModelInstance:
         for ii in tqdm(range(n_problems), desc='dataset_progress', unit='problem'):
             problem = dataset[ii]
             self.change_context(problem)
-            out = self.generate_adjusted(top_k, top_p, adjust_fn, max_tokens)
+            out = self.generate_with_sampler(top_k, top_p, adjust_fn, max_tokens)
             answers.append(''.join(out.response_probabilities[0]))
             _logger.info('Completed problem: %d/%d', ii + 1, n_problems)
         return answers

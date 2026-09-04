@@ -12,7 +12,7 @@ This tutorial builds the smallest possible custom sampler from scratch: a
 It is intentionally short — short enough to type out live and talk through in
 a presentation. By the end you will have written your own
 :data:`AdjustFn` and run it through
-:meth:`ModelInstance.generate_adjusted()`.
+:meth:`Model.generate_with_sampler()`.
 
 Prerequisites
 -------------
@@ -24,7 +24,7 @@ The whole idea
 --------------
 
 An :data:`AdjustFn` is just a callable. It receives a
-:class:`GenerationContext` holding the current top-k candidate tokens and
+:class:`SamplerContext` holding the current top-k candidate tokens and
 their log-probabilities, and returns a :class:`CandidateTokens` whose
 log-probabilities will be renormalised and sampled from.
 
@@ -40,9 +40,9 @@ The sampler
    :name: greedy-fn
 
    import numpy as np
-   from problm_solver.adjust_probs import CandidateTokens, GenerationContext
+   from problm_solver.samplers import CandidateTokens, SamplerContext
 
-   def greedy(context: GenerationContext) -> CandidateTokens:
+   def greedy(context: SamplerContext) -> CandidateTokens:
        """Always pick the single most-probable candidate token."""
        ids = context.token_id_probs.candidate_ids
        lps = context.token_id_probs.candidate_logprobs
@@ -63,11 +63,11 @@ Pass ``greedy`` as the ``adjust_fn`` exactly like any built-in sampler:
    :linenos:
    :name: greedy-use
 
-   from problm_solver.llama_interface import ModelInstance
+   from problm_solver.llama_interface import Model
 
-   model = ModelInstance('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
+   model = Model('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
 
-   data = model.generate_adjusted(
+   data = model.generate_with_sampler(
        top_k=40,
        top_p=1.0,
        adjust_fn=greedy,
@@ -82,7 +82,7 @@ collapse.
 What to say while presenting it
 -------------------------------
 
-- An :data:`AdjustFn` takes a :class:`GenerationContext`, returns
+- An :data:`AdjustFn` takes a :class:`SamplerContext`, returns
   :class:`CandidateTokens`. That is the whole contract.
 - ``context.token_id_probs`` already holds the filtered top-k candidates, so
   the sampler never touches the raw vocabulary.

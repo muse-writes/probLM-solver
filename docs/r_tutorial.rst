@@ -56,7 +56,7 @@ Finally, the modules themselves can be imported and assigned to R variables. For
 .. sourcecode:: r
 
    llama <- import("problm_solver.llama_interface")
-   adj <- import("problm_solver.adjust_probs")
+   adj <- import("problm_solver.samplers")
 
 Using the API in R
 ------------------
@@ -96,7 +96,7 @@ Please see the below example which loads and queries a model in R.
     llama <- import("problm_solver.llama_interface")
     #adj <- import("problm_solver.llama_interface")
 
-    model <- llama$ModelInstance(
+    model <- llama$Model(
       fname = "path/to/model.gguf",
       context = "Why is the sky blue?",
       n_ctx = as.integer(4096),
@@ -109,9 +109,9 @@ Please see the below example which loads and queries a model in R.
 Sampling Functions in R
 -----------------------
 
-``reticulate`` implicitly converts between Python and R callables, so to create a custom sampling function, you can define it as an R function, and use ``problm_solver``'s ``ModelInstance.generate_adjusted()`` function as usual.
+``reticulate`` implicitly converts between Python and R callables, so to create a custom sampling function, you can define it as an R function, and use ``problm_solver``'s ``Model.generate_with_sampler()`` function as usual.
 
-Bear in mind that a sampling function takes a generic dataclass ``GenerationContext`` as an argument, so the R function will need to follow the following scheme
+Bear in mind that a sampling function takes a generic dataclass ``SamplerContext`` as an argument, so the R function will need to follow the following scheme
 
 .. sourcecode:: r
     :linenos:
@@ -125,7 +125,7 @@ Bear in mind that a sampling function takes a generic dataclass ``GenerationCont
 
     py_sampling_fn <- r_to_py(sampling_fn)
 
-    out <- model$generate_adjusted(
+    out <- model$generate_with_sampler(
       top_k = as.integer(30),
       top_p = 0.9,
       adjust_fn = py_sampling_fn,
