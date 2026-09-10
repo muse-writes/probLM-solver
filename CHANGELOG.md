@@ -1,3 +1,35 @@
+## v1.7.0 (2026-09-10)
+
+### BREAKING CHANGE
+
+- `GenerationContext` is now `SamplerContext`, please
+update all sampler definitons and type signatures accordingly.
+- `generate_adjusted` is now `generate_with_sampler`,
+`sample_token_adjusted` is now just `sample_token`. Update function
+calls accordingly.
+- `ModelInstance` has been shortened to just `Model`,
+update all scripts and imports accordingly.
+- `adjust_probs` module is now named `samplers` update
+all imports accordingly.
+
+### Feat
+
+- **API**: Exposed the most important scripting features in the base module
+
+### Fix
+
+- **llama**: `Model.query` now correctly grabs logits from backend.
+- removed redundant class definition in tests.
+- AGENTS guidance for RNG reflects `problm_solver.random`
+
+### Refactor
+
+- `GenerationContext` renamed to `SamplerContext`
+- Renamed Model methods for generating with a sampler.
+- Renamed `ModelInstance` class to `Model`
+- rename `adjust_probs` module to `samplers`.
+- Split up `SamplePowerDist.__call__` for intuition
+
 ## v1.6.0 (2026-09-02)
 
 ### BREAKING CHANGE
