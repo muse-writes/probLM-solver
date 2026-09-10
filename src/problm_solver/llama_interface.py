@@ -220,7 +220,7 @@ class Model:
             stream='llama.query',
         )
         for _ in range(max_tokens):
-            logprobs = self._log_softmax(self._llm.scores[self._llm.n_tokens - 1])
+            logprobs = self._log_softmax(self._llm_backend.last_logits())
             next_id = int(np.argmax(logprobs + method_rng.gumbel(size=len(logprobs))))
             if next_id == self._llm.token_eos():
                 break
