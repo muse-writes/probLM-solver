@@ -22,8 +22,8 @@ Minimal reproducible script
 
    from pathlib import Path
 
-   from problm_solver.adjust_probs import SampleLowTemp, adjust_identity
-   from problm_solver.llama_interface import ModelInstance
+   from problm_solver.samplers import SampleLowTemp, adjust_identity
+   from problm_solver.llama_interface import Model
    from problm_solver.random import RandomManager
 
    model_path = Path.home() / '.problm-solver' / 'models' / 'Qwen3.5-0.8B-Q4_K_M.gguf'
@@ -32,14 +32,14 @@ Minimal reproducible script
    # One seed for the whole run.
    run_rng = RandomManager(seed=12345)
 
-   model = ModelInstance(
+   model = Model(
        fname=str(model_path),
        context=prompt,
        logits_all=True,
        rng=run_rng,
    )
 
-   out_identity = model.generate_adjusted(
+   out_identity = model.generate_with_sampler(
        top_k=30,
        top_p=0.9,
        adjust_fn=adjust_identity,
@@ -49,7 +49,7 @@ Minimal reproducible script
 
    model.change_context(prompt)
 
-   out_low_temp = model.generate_adjusted(
+   out_low_temp = model.generate_with_sampler(
        top_k=30,
        top_p=0.9,
        adjust_fn=SampleLowTemp(alpha=2.0),

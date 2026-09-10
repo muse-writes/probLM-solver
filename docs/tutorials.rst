@@ -33,23 +33,23 @@ You will be asked to provide a ``.gguf`` model file in the directory ``~/.problm
 Scripting with ``problm_solver``
 --------------------------------
 
-The main class that probLM-solver uses for interacting with an LLM is ``problm_solver.llama_interface.ModelInstance``.
+The main class that probLM-solver uses for interacting with an LLM is ``problm_solver.llama_interface.Model``.
 A simple script for setting up a model, and generating a response with low-temperature sampling, can be seen in the code block below.
 
 .. sourcecode:: python
    :linenos:
    :name: low-temp
 
-   from problm_solver.adjust_probs import SampleLowTemp
-   from problm_solver.llama_interface import ModelInstance
+   from problm_solver.samplers import SampleLowTemp
+   from problm_solver.llama_interface import Model
 
    temp = 0.5
    top_k = 8
    top_p = 0.9
-   model = ModelInstance('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
+   model = Model('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
 
    sampling_func = SampleLowTemp(alpha=1./temp)
-   data = model.generate_adjusted(
+   data = model.generate_with_sampler(
        top_k=top_k,
        top_p=top_p,
        adjust_fn=sampling_func,
@@ -59,7 +59,7 @@ A simple script for setting up a model, and generating a response with low-tempe
 
 Let's explain in detail what this code is doing.
 
-The key idea here is that sampling functions can be defined or freely switched between when generating data, as they aren't specified until ``ModelInstance.generate_adjusted()`` is called.
+The key idea here is that sampling functions can be defined or freely switched between when generating data, as they aren't specified until ``Model.generate_with_sampler()`` is called.
 
 A couple of hyperparameters are specified in advance, namely the temperature (``temp``), of the model and the number of most-probable tokens considered at each step (``top_k``). If you have already heard of low-temperature sampling or top-k sampling, these concepts will be familiar.
 
@@ -67,7 +67,7 @@ Next, the model stored at a given path is instanced with some context. Important
 
 Then, a sampling function is generated from one of the built-in classes. ``SampleLowTemp()`` is a callable class, with relevant hyperparameters set when it is instanced.
 
-Finally, data from the response are collected into a dataclass (``data``), as an output of ``generate_adjusted()``.
+Finally, data from the response are collected into a dataclass (``data``), as an output of ``generate_with_sampler()``.
 This dictionary is an instance of ``problm_solver.data.LLMOutputDataFull``, and a list of the values contained within is as follows:
 
 .. sourcecode:: python
@@ -89,25 +89,25 @@ This dictionary is an instance of ``problm_solver.data.LLMOutputDataFull``, and 
 Sampling Token-by-token
 -----------------------
 
-The previous section introduced the function :meth:`generate_adjusted()` to generate outputs based on a provided context and sampling function.
+The previous section introduced the function :meth:`generate_with_sampler()` to generate outputs based on a provided context and sampling function.
 It may sometimes be desirable for the user to generate one token at a time, to either switch sampling functions out or analyze specific probabilities.
-This is where the method :meth:`ModelInstance.sample_token_adjusted()` is used.
+This is where the method :meth:`Model.sample_token()` is used.
 See the following example:
 
 .. sourcecode:: python
    :linenos:
    :name: sample-token
 
-   from problm_solver.adjust_probs import SampleLowTemp
-   from problm_solver.llama_interface import ModelInstance
+   from problm_solver.samplers import SampleLowTemp
+   from problm_solver.llama_interface import Model
 
    temp = 0.5
    top_k = 30
    top_p = 0.9
-   model = ModelInstance('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
+   model = Model('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
 
    sampling_func = SampleLowTemp(alpha=1./temp)
-   token_data = model.sample_token_adjusted(
+   token_data = model.sample_token(
        top_k=top_k,
        top_p=top_p,
        adjust_fn=sampling_func,
@@ -131,27 +131,27 @@ Let's start with the code snippet below. In this example we use the built-in Met
    :linenos:
    :name: power-dist
 
-   from problm_solver.adjust_probs import MetropolisSampler, SamplePowerDist
-   from problm_solver.llama_interface import ModelInstance
+   from problm_solver.samplers import MetropolisSampler, SamplePowerDist
+   from problm_solver.llama_interface import Model
 
    temp = 0.5
    top_k = 8
    peek = 10
-   model = ModelInstance('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
+   model = Model('path/to/model.gguf', 'Why is the sky blue?', logits_all=True)
 
    sampling_func = SamplePowerDist(
        alpha=1./temp,
        lookahead_depth=peek,
        branch_sampler=MetropolisSampler(equil_branches=5, max_branches=10)
    )
-   data = model.generate_adjusted(
+   data = model.generate_with_sampler(
        top_k=top_k,
        top_p=0.9,
        adjust_fn=sampling_func,
        max_tokens=128
    )
 
-probLM-solver *again* implements the sampling function as a callable class, in ``problm_solver.adjust_probs.SamplePowerDist``.
+probLM-solver *again* implements the sampling function as a callable class, in ``problm_solver.samplers.SamplePowerDist``.
 This takes three main parameters:
 
 - ``alpha``, which you are already familiar with;
@@ -166,7 +166,7 @@ A second built-in option is token-level beam expansion:
 
 .. sourcecode:: python
 
-   from problm_solver.adjust_probs import BeamSampler, SamplePowerDist
+   from problm_solver.samplers import BeamSampler, SamplePowerDist
 
    sampling_func = SamplePowerDist(
        alpha=2.0,
@@ -227,7 +227,7 @@ It implements four required methods (plus an optional beam hook):
 - ``BranchSampler.should_continue()`` handles logic for terminating proposal sampling.
 - ``BranchSampler.future_logprob()`` combines collected branch log-probabilities into one future score used by ``SamplePowerDist``.
 
-All of these methods are called at some point by ``ModelInstance.generate_adjusted()``.
+All of these methods are called at some point by ``Model.generate_with_sampler()``.
 
 A user who has made the class ``MySampler``, can now pass it to an instance of ``SamplePowerDist``, to create a sampling function.
 
@@ -235,14 +235,14 @@ A user who has made the class ``MySampler``, can now pass it to an instance of `
    :linenos:
    :name: power-sampler
 
-   from problm_solver.adjust_probs import BranchSampler, SamplePowerDist
+   from problm_solver.samplers import BranchSampler, SamplePowerDist
 
    class MySampler(BranchSampler):
        ...
 
    temp = 0.5
    sampling_func = SamplePowerDist(alpha=1./temp, lookahead_depth=10, branch_sampler=MySampler())
-   data = model.generate_adjusted(top_k=8, top_p=0.9, adjust_fn=sampling_func, max_tokens=128)
+   data = model.generate_with_sampler(top_k=8, top_p=0.9, adjust_fn=sampling_func, max_tokens=128)
 
 Let's explore a hypothetical greedy branch sampler. It might be defined in the following way:
 
@@ -250,7 +250,7 @@ Let's explore a hypothetical greedy branch sampler. It might be defined in the f
    :linenos:
    :name: greedy-sampler
 
-   from problm_solver.adjust_probs import BranchSampler, SamplePowerDist
+   from problm_solver.samplers import BranchSampler, SamplePowerDist
 
    class MyGreedySampler(BranchSampler):
        """My greedy sampler, always picks the most probable branch."""

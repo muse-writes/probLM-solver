@@ -59,7 +59,7 @@ This virtual environment can be used in a shebang for Python scripts that work f
 ```Python
 #!/path/to/probLM-solver/.venv/bin/python
 
-from problm_solver.llama_interface import ModelInstance
+from problm_solver.llama_interface import Model
 ...
 ```
 
