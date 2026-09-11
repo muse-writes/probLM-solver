@@ -11,9 +11,7 @@ def _logits() -> np.ndarray:
     return np.array([2.0, 5.0, 3.0, 0.5, -1.0, 1.0, 0.2], dtype=np.float32)
 
 
-# ---------------------------------------------------------------------------
-# get_candidate_generator: validation
-# ---------------------------------------------------------------------------
+# Validation of the generator factory.
 class TestGeneratorValidation:
     """Tests for get_candidate_generator parameter validation."""
 
@@ -47,9 +45,7 @@ class TestGeneratorValidation:
         assert isinstance(result, CandidateTokens)
 
 
-# ---------------------------------------------------------------------------
-# get_candidate_generator: routing
-# ---------------------------------------------------------------------------
+# Routing of the generator factory.
 class TestGeneratorRouting:
     """Tests for the truncation routing table."""
 
@@ -107,7 +103,7 @@ class TestGeneratorRouting:
         lp = log_softmax(logits)
         order = np.argsort(lp)[::-1]
         probs = np.exp(lp[order])
-        nucleus = int(np.searchsorted(np.cumsum(probs), 0.6, side='right') + 1)
+        nucleus = int(np.searchsorted(np.cumsum(probs), 0.6, side='left') + 1)
         assert len(result.candidate_ids) == nucleus
         assert result.candidate_ids.tolist() == [int(i) for i in order[:nucleus]]
 
@@ -117,9 +113,105 @@ class TestGeneratorRouting:
         result = CandidateGeneratorFactory().get_candidate_generator(top_k=4, top_p=0.6)(logits)
         lp = log_softmax(logits)
         order = np.argsort(lp)[::-1][:4]
-        cumulative = np.cumsum(np.exp(lp[order]))
-        expected = min(int(np.searchsorted(cumulative, 0.6, side='right')) + 1, 4)
+        renorm = lp[order] - np.log(np.exp(lp[order]).sum())
+        cumulative = np.cumsum(np.exp(renorm))
+        expected = min(int(np.searchsorted(cumulative, 0.6, side='left')) + 1, 4)
         assert len(result.candidate_ids) == expected
+
+
+# ---------------------------------------------------------------------------
+# Tie rule (HuggingFace TopKLogitsWarper parity)
+# ---------------------------------------------------------------------------
+class TestGeneratorTieRule:
+    """Tests for the boundary-tie rule (tokens tied at the k-th value are kept)."""
+
+    @staticmethod
+    def _tied_logits() -> np.ndarray:
+        """Return logits whose 3rd/4th/5th tokens are exactly tied at prob 0.1."""
+        return np.log(np.array([0.4, 0.3, 0.1, 0.1, 0.1, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9]))
+
+    def test_top_k_keeps_all_boundary_ties(self) -> None:
+        """top_k=3 over a tie group at the boundary keeps all tied tokens (HF parity)."""
+        n_expected = 5
+        logits = self._tied_logits().astype(np.float32)
+        result = CandidateGeneratorFactory().get_candidate_generator(top_k=3, top_p=1.0)(logits)
+        assert set(result.candidate_ids.tolist()) == {0, 1, 2, 3, 4}
+        assert len(result.candidate_ids) == n_expected
+
+    def test_top_k_keeps_exactly_k_without_ties(self) -> None:
+        """Distinct boundary values still yield exactly k candidates."""
+        n_expected = 3
+        logits = np.log(np.array([0.4, 0.3, 0.2, 0.05, 0.02, 0.03]), dtype=np.float32)
+        result = CandidateGeneratorFactory().get_candidate_generator(top_k=3, top_p=1.0)(logits)
+        assert len(result.candidate_ids) == n_expected
+        assert set(result.candidate_ids.tolist()) == {0, 1, 2}
+
+    def test_top_k_keeps_ties_above_the_boundary(self) -> None:
+        """Tokens tied at the max survive even when they already exceed k."""
+        logits = np.log(np.array([0.4, 0.4, 0.1, 0.1]), dtype=np.float32)
+        result = CandidateGeneratorFactory().get_candidate_generator(top_k=2, top_p=1.0)(logits)
+        assert set(result.candidate_ids.tolist()) == {0, 1}
+
+    def test_tie_order_is_descending_value_then_ascending_id(self) -> None:
+        """Output is ordered descending by value, with ties in ascending id order."""
+        logits = self._tied_logits().astype(np.float32)
+        result = CandidateGeneratorFactory().get_candidate_generator(top_k=3, top_p=1.0)(logits)
+        assert result.candidate_ids.tolist() == [0, 1, 2, 3, 4]
+        lp = result.candidate_logprobs
+        assert np.all(lp[:-1] >= lp[1:])
+        # Equal-valued neighbours keep ascending token ids.
+        for i in range(len(lp) - 1):
+            if lp[i] == lp[i + 1]:
+                assert result.candidate_ids[i] < result.candidate_ids[i + 1]
+
+    def test_combined_truncates_kept_tie_set_with_top_p(self) -> None:
+        """The top-p stage truncates the (possibly enlarged) tied kept set."""
+        logits = self._tied_logits().astype(np.float32)
+        # Kept top-k set: {0,1,2,3,4} (ties kept); un-renormalised cumulative:
+        # [0.4, 0.7, 0.8, 0.9, 1.0] -> first > 0.75 is 0.8 (index 2) -> keep 3.
+        result = CandidateGeneratorFactory().get_candidate_generator(top_k=3, top_p=0.75)(logits)
+        assert result.candidate_ids.tolist() == [0, 1, 2]
+
+    def test_repeated_calls_are_deterministic(self) -> None:
+        """Repeated calls with tied values produce identical output."""
+        logits = self._tied_logits().astype(np.float32)
+        generator = CandidateGeneratorFactory().get_candidate_generator(top_k=3, top_p=1.0)
+        a = generator(logits)
+        b = generator(logits)
+        assert np.array_equal(a.candidate_ids, b.candidate_ids)
+        assert np.array_equal(a.candidate_logprobs, b.candidate_logprobs)
+
+
+# ---------------------------------------------------------------------------
+# Renormalisation and threshold strictness
+# ---------------------------------------------------------------------------
+class TestCombinedRenormalisation:
+    """Tests for Issue 4 (renormalised top-k mass) and Issue 3 (non-strict threshold)."""
+
+    def test_combined_renormalises_top_k_mass(self) -> None:
+        """top-p is a fraction of the renormalised top-k mass (HF parity)."""
+        # Top-5 mass is 0.85 < top_p=0.9; renormalised, the nucleus is 4 tokens.
+        probs = np.array([0.30, 0.20, 0.10, 0.08, 0.05, 0.04, 0.03, 0.02, 0.01, 0.17])
+        logits = np.log(probs, dtype=np.float32)
+        result = CandidateGeneratorFactory().get_candidate_generator(top_k=5, top_p=0.9)(logits)
+        assert set(result.candidate_ids.tolist()) == {0, 1, 2, 9}
+        assert len(result.candidate_ids) == 4
+
+    def test_top_p_stops_at_exact_threshold(self) -> None:
+        """A cumulative exactly equal to top_p stops the nucleus (non-strict rule)."""
+        logits = np.log(np.array([0.5, 0.5]), dtype=np.float32)
+        result = CandidateGeneratorFactory().get_candidate_generator(top_k=None, top_p=0.5)(logits)
+        # cum = [0.5, 1.0]; first cum >= 0.5 is the top token itself.
+        assert len(result.candidate_ids) == 1
+
+    def test_combined_returns_original_logprobs(self) -> None:
+        """The renormalisation only affects selection; stored logprobs are unscaled."""
+        probs = np.array([0.30, 0.20, 0.10, 0.08, 0.05, 0.04, 0.03, 0.02, 0.01, 0.17])
+        logits = np.log(probs, dtype=np.float32)
+        result = CandidateGeneratorFactory().get_candidate_generator(top_k=5, top_p=0.9)(logits)
+        expected = log_softmax(logits)
+        for token_id, value in zip(result.candidate_ids, result.candidate_logprobs, strict=True):
+            assert float(value) == pytest.approx(float(expected[token_id]))
 
 
 # ---------------------------------------------------------------------------
@@ -187,8 +279,9 @@ class TestGeneratorTemperature:
         alpha, top_k, top_p = 0.5, 5, 0.7
         lp = log_softmax(logits * np.float64(alpha))
         order = [int(i) for i in np.argsort(lp)[::-1][:top_k]]
-        cumulative = np.cumsum(np.exp(lp[order]))
-        keep_n = min(int(np.searchsorted(cumulative, top_p, side='right')) + 1, top_k)
+        renorm = lp[order] - np.log(np.exp(lp[order]).sum())
+        cumulative = np.cumsum(np.exp(renorm))
+        keep_n = min(int(np.searchsorted(cumulative, top_p, side='left')) + 1, top_k)
         result = CandidateGeneratorFactory().get_candidate_generator(
             top_k=top_k, top_p=top_p, alpha=alpha
         )(logits)

@@ -200,7 +200,14 @@ class CandidateGeneratorFactory:
 
     @staticmethod
     def _top_k_from_logprobs(logprobs: npt.NDArray[np.float64], top_k: int) -> CandidateTokens:
-        """Top-k core operating on log-probabilities."""
+        """Keep all tokens whose log-probability reaches the ``top_k``-th largest value.
+
+        :param logprobs: Full-vocabulary log-probabilities.
+        :param top_k: Requested number of top tokens.
+        :returns: The candidate set, ordered descending by log-probability
+            (ties broken by ascending token id).
+        :raises ValueError: If ``top_k < 1``.
+        """
         if top_k < 1:
             msg = 'top_k must be greater than 0'
             raise ValueError(msg)
@@ -211,17 +218,13 @@ class CandidateGeneratorFactory:
             )
 
         n = min(top_k, len(logprobs))
-        if n == 1:
-            return CandidateGeneratorFactory._argmax_from_logprobs(logprobs)
-
-        cutoff = len(logprobs) - n
-        top_ids = np.argpartition(logprobs, cutoff)[-n:]
-        top_lp = logprobs[top_ids]
-        order = np.argsort(top_lp)[::-1]
-        top_ids = top_ids[order]
+        kth_largest = np.partition(logprobs, len(logprobs) - n)[len(logprobs) - n]
+        keep_ids = np.flatnonzero(logprobs >= kth_largest)
+        order = np.argsort(-logprobs[keep_ids], kind='stable')
+        keep_ids = keep_ids[order]
         return CandidateTokens(
-            candidate_ids=top_ids.astype(np.int32, copy=False),
-            candidate_logprobs=logprobs[top_ids],
+            candidate_ids=keep_ids.astype(np.int32, copy=False),
+            candidate_logprobs=logprobs[keep_ids],
         )
 
     # -- Top-p -- #
@@ -250,7 +253,7 @@ class CandidateGeneratorFactory:
         logprobs: npt.NDArray[np.float64],
         top_p: np.float64,
     ) -> CandidateTokens:
-        """High-``top_p`` core operating on log-probabilities."""
+        """Keep the smallest full-vocabulary prefix whose cumulative probability reaches ``top_p``."""
         if len(logprobs) == 0:
             return CandidateTokens(
                 candidate_ids=np.empty(0, dtype=np.int32),
@@ -261,7 +264,7 @@ class CandidateGeneratorFactory:
         sorted_lp = logprobs[sorted_ids]
         cumulative = np.cumsum(np.exp(sorted_lp))
         keep_n = min(
-            int(np.searchsorted(cumulative, top_p, side='right')) + 1,
+            int(np.searchsorted(cumulative, top_p, side='left')) + 1,
             len(sorted_ids),
         )
         keep_ids = sorted_ids[:keep_n]
@@ -291,7 +294,7 @@ class CandidateGeneratorFactory:
         logprobs: npt.NDArray[np.float64],
         top_p: np.float64,
     ) -> CandidateTokens:
-        """Low-``top_p`` core operating on log-probabilities."""
+        """As :meth:`_top_p_high_from_logprobs`, via adaptive top-k growth for small ``top_p``."""
         if len(logprobs) == 0:
             return CandidateTokens(
                 candidate_ids=np.empty(0, dtype=np.int32),
@@ -309,8 +312,8 @@ class CandidateGeneratorFactory:
             top_lp = top_lp[order]
 
             cumulative = np.cumsum(np.exp(top_lp))
-            if cumulative[-1] > top_p or k == vocab_size:
-                keep_n = min(int(np.searchsorted(cumulative, top_p, side='right')) + 1, k)
+            if cumulative[-1] >= top_p or k == vocab_size:
+                keep_n = min(int(np.searchsorted(cumulative, top_p, side='left')) + 1, k)
                 keep_ids = top_ids[:keep_n]
                 return CandidateTokens(
                     candidate_ids=keep_ids.astype(np.int32, copy=False),
@@ -350,7 +353,15 @@ class CandidateGeneratorFactory:
         top_k: int,
         top_p: np.float64,
     ) -> CandidateTokens:
-        """Perform combined top-k/top-p truncation on log-probabilities."""
+        """Truncate the renormalised top-k kept set to the smallest prefix reaching ``top_p``.
+
+        :param logprobs: Full-vocabulary log-probabilities.
+        :param top_k: Requested number of top tokens.
+        :param top_p: Nucleus threshold.
+        :returns: The candidate set, ordered descending by log-probability
+            (ties broken by ascending token id).
+        :raises ValueError: If ``top_k < 1`` or ``top_p`` outside (0, 1].
+        """
         if top_k < 1:
             msg = 'top_k must be greater than 0'
             raise ValueError(msg)
@@ -364,18 +375,17 @@ class CandidateGeneratorFactory:
             )
 
         n = min(top_k, len(logprobs))
-        if n == 1:
-            return CandidateGeneratorFactory._argmax_from_logprobs(logprobs)
-
-        cutoff = len(logprobs) - n
-        top_ids = np.argpartition(logprobs, cutoff)[-n:]
-        top_lp = logprobs[top_ids]
-        order = np.argsort(top_lp)[::-1]
+        kth_largest = np.partition(logprobs, len(logprobs) - n)[len(logprobs) - n]
+        top_ids = np.flatnonzero(logprobs >= kth_largest)
+        order = np.argsort(-logprobs[top_ids], kind='stable')
         top_ids = top_ids[order]
-        top_lp = top_lp[order]
 
-        cumulative = np.cumsum(np.exp(top_lp))
-        keep_n = min(int(np.searchsorted(cumulative, top_p, side='right')) + 1, len(top_ids))
+        # Renormalise the top-k mass to 1 before the nucleus threshold, as HF's
+        # TopPLogitsWarper softmaxes over the top-k-filtered vector.
+        renorm_lp = logprobs[top_ids]
+        renorm_lp = renorm_lp - np.log(np.exp(renorm_lp).sum())
+        cumulative = np.cumsum(np.exp(renorm_lp))
+        keep_n = min(int(np.searchsorted(cumulative, top_p, side='left')) + 1, len(top_ids))
         keep_ids = top_ids[:keep_n]
         return CandidateTokens(
             candidate_ids=keep_ids.astype(np.int32, copy=False),
