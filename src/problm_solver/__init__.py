@@ -4,7 +4,7 @@ from problm_solver.llama_interface import Model
 from problm_solver.random import RandomManager
 from problm_solver.samplers import (
     MetropolisSampler,
-    SampleLowTemp,
+    SampleLowTempNucleus,
     SamplePowerDist,
     SamplerContext,
     adjust_identity,
@@ -16,7 +16,7 @@ __all__ = [
     'MetropolisSampler',
     'Model',
     'PSRandom',
-    'SampleLowTemp',
+    'SampleLowTempNucleus',
     'SamplePowerDist',
     'SamplerContext',
     'adjust_identity',

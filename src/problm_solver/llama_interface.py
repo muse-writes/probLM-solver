@@ -17,7 +17,7 @@ from llama_cpp.llama_chat_format import Jinja2ChatFormatter
 from tqdm import tqdm
 
 from problm_solver.analysis.probabilities import prob_of_token, sample_from_logprobs  # noqa: F401
-from problm_solver.candidates import CandidateGeneratorFactory, CandidateTokens
+from problm_solver.candidates import CandidateGeneratorFactory, CandidateTokens, log_softmax
 from problm_solver.data import (
     Hyperparams,
     LLMNextTokenData,
@@ -220,7 +220,7 @@ class Model:
             stream='llama.query',
         )
         for _ in range(max_tokens):
-            logprobs = self._log_softmax(self._llm_backend.last_logits())
+            logprobs = log_softmax(self._llm_backend.last_logits())
             next_id = int(np.argmax(logprobs + method_rng.gumbel(size=len(logprobs))))
             if next_id == self._llm.token_eos():
                 break
@@ -263,7 +263,7 @@ class Model:
             stream='llama.query_log_probs',
         )
         for _ in range(max_tokens):
-            logprobs = self._log_softmax(self._llm_backend.last_logits())
+            logprobs = log_softmax(self._llm_backend.last_logits())
             next_id = int(np.argmax(logprobs + method_rng.gumbel(size=len(logprobs))))
             if next_id == eos_id:
                 break
@@ -281,9 +281,8 @@ class Model:
         """Return top-k next-token candidates in token-ID space."""
         self._llm_backend.reset()
         self._llm_backend.decode(context_tokens)
-        logprobs = self._log_softmax(self._llm_backend.last_logits())
-        generator = self._candidate_factory.get_candidate_generator(top_k=n_tokens, top_p=1.0)
-        return generator(logprobs)
+        generator = self._candidate_factory.get_candidate_generator(top_k=n_tokens, top_p=1.0, alpha=1.)
+        return generator(self._llm_backend.last_logits())
 
     def query_log_probs_next_token(
         self,
@@ -364,7 +363,7 @@ class Model:
         for _ in range(max_tokens):
             # scores[n_tokens - 1] is the most recently decoded logit row,
             # valid for logits_all=True (filled by eval's n_past slice).
-            logprobs = self._log_softmax(self._llm_backend.last_logits())
+            logprobs = log_softmax(self._llm_backend.last_logits())
 
             # Gumbel-max trick: argmax(log p + Gumbel(0,1)) is equivalent to
             # drawing from categorical(softmax(log p)) without materialising
@@ -399,7 +398,7 @@ class Model:
         )
 
         for _ in range(max_tokens):
-            logprobs = self._log_softmax(self._llm_backend.last_logits())
+            logprobs = log_softmax(self._llm_backend.last_logits())
             next_id = int(np.argmax(logprobs + method_rng.gumbel(size=len(logprobs))))
 
             if next_id == eos_id:
@@ -472,7 +471,7 @@ class Model:
         # First-step logits: the root's already-computed next-token
         # distribution, shared by every branch. Subsequent steps read
         # per-branch logits from the batched decode.
-        root_logprobs = self._log_softmax(self._llm_backend.last_logits())
+        root_logprobs = log_softmax(self._llm_backend.last_logits())
         current_logprobs = np.tile(root_logprobs, (n_branches, 1))
 
         try:
@@ -622,27 +621,6 @@ class Model:
 
 
     @staticmethod
-    def _log_softmax(logits: npt.NDArray[np.float32]) -> npt.NDArray[np.float64]:
-        """Apply numerically stable log-softmax to a 1-D logits vector.
-
-        Subtracts the maximum logit before exponentiation to prevent float
-        overflow (common with raw LLM logits which can exceed ±300), then
-        uses the log-sum-exp identity:
-
-        .. code-block:: text
-
-            log_softmax(x_i) = (x_i − max x) − log Σ_j exp(x_j − max x)
-
-        The result satisfies ``exp(result).sum() ≈ 1`` and all values are ≤ 0.
-
-        :param logits: 1-D array of raw model logits for the full vocabulary.
-        :returns: 1-D float64 array of log-probabilities.
-        """
-        x = logits.astype(np.float64)
-        shifted = x - x.max()
-        return shifted - np.log(np.exp(shifted).sum())
-
-    @staticmethod
     def _log_softmax_rows(logits: npt.NDArray[np.float32]) -> npt.NDArray[np.float64]:
         """Apply numerically stable row-wise log-softmax to a 2-D logits array.
 
@@ -659,19 +637,18 @@ class Model:
         return shifted - np.log(np.exp(shifted).sum(axis=1, keepdims=True))
 
 
-    def _top_k_ids_from_logprobs(
+    def _top_k_ids_from_logits(
         self,
-        logprobs: npt.NDArray[np.float64],
+        logits: npt.NDArray[np.float32],
         n: int,
     ) -> list[tuple[int, float]]:
         """Return top-k ``(token_id, logprob)`` pairs ordered descending by logprob.
 
-        :param logprobs: Full vocabulary array of log-probabilities as
-            returned by :meth:`_log_softmax`
+        :param logits: Full vocabulary array of raw model logits.
         :param n: number of ``(token_id, logprob)`` pairs to return.
         """
         generator = self._candidate_factory.get_candidate_generator(top_k=n, top_p=1.0)
-        candidates = generator(logprobs)
+        candidates = generator(logits)
         return [
             (int(idx), float(lp))
             for idx, lp in zip(
@@ -698,10 +675,11 @@ class Model:
     ) -> LLMOutputDataFull:
         """Generate a response token-by-token with adjusted next-token probabilities.
 
-        At each step the top ``top_k`` candidate next tokens are retrieved
-        and passed to ``adjust_fn``, which may modify the log-probability
-        distribution. A single token is then sampled from the adjusted
-        distribution and appended to the context before the next step.
+        At each step the candidate generator scales the raw logits by ``alpha``
+        (inverse temperature) and applies top-k/top-p truncation; the resulting
+        candidates are passed to ``adjust_fn``, which may modify the
+        log-probability distribution. A single token is then sampled from the
+        adjusted distribution and appended to the context before the next step.
 
         :param top_k: Number of top candidate tokens to retrieve at each
             step.
@@ -710,6 +688,8 @@ class Model:
             returns adjusted candidate token IDs/log-probabilities as
             ``CandidateTokens``. Values do not need to be normalized.
         :param max_tokens: Maximum number of tokens to generate.
+        :param alpha: Inverse temperature (``temperature = 1 / alpha``) applied
+            by the candidate generator to the raw logits.
         :returns: ``LLMOutputDataFull`` containing the model's response,
             candidate tokens at each step, and logprobs.
         """
@@ -726,7 +706,7 @@ class Model:
                 sampling_method = adjust_fn.__class__.__name__
             else:
                 sampling_method = getattr(adjust_fn, '__name__', type(adjust_fn).__name__)
-        candidate_generator = self._candidate_factory.get_candidate_generator(top_k, top_p)
+        candidate_generator = self._candidate_factory.get_candidate_generator(top_k, top_p, alpha)
 
         # Parameter warnings.
         _logger.info('Generation with adjusted probabilities started')
@@ -762,9 +742,8 @@ class Model:
             cast('Callable[[], None]', reset_fn)()
         for step in tqdm(range(max_tokens), desc='generate_with_sampler', unit='tok'):
 
-            # Determine logprobs and sample intersection of top-k and top-p.
-            logprobs = self._log_softmax(self._llm_backend.last_logits())
-            candidates = candidate_generator(logprobs)
+            # Determine candidates: the generator scales, normalises and truncates.
+            candidates = candidate_generator(self._llm_backend.last_logits())
 
             # Skip adjustment and sampling if only one logprob.
             if len(candidates.candidate_ids) == 1:
@@ -794,8 +773,8 @@ class Model:
                         depth, n, rng=method_rng,
                     ),
                     base_live_state=pre_adjust_state,
-                    query_next_ids_from_live=lambda n: self._top_k_ids_from_logprobs(
-                        self._log_softmax(self._llm_backend.last_logits()),
+                    query_next_ids_from_live=lambda n: self._top_k_ids_from_logits(
+                        self._llm_backend.last_logits(),
                         n,
                     ),
                     save_live_state=self.save_live_state,
@@ -855,6 +834,7 @@ class Model:
         self,
         top_k: int,
         top_p: float,
+        alpha: float,
         adjust_fn: AdjustFn,
         *,
         use_live_state: bool = True,
@@ -879,6 +859,8 @@ class Model:
 
         :param top_k: Number of top-k tokens to consider.
         :param top_p: Nucleus threshold in ``(0, 1]``.
+        :param alpha: Inverse temperature (``temperature = 1 / alpha``). applied
+            by the candidate generator to the raw logits.
         :param adjust_fn: Function that adjusts candidate token log-probabilities.
         :param use_live_state: Prefer sampling from current live model state.
         :param context_tokens: Optional explicit context token IDs to evaluate
@@ -897,7 +879,7 @@ class Model:
             )
             raise ValueError(msg)
 
-        candidate_generator = self._candidate_factory.get_candidate_generator(top_k, top_p)
+        candidate_generator = self._candidate_factory.get_candidate_generator(top_k, top_p, alpha)
 
         method_rng = resolve_rng(
             self._rng if rng is None else rng,
@@ -919,8 +901,7 @@ class Model:
                 state_source = 'context_tokens'
             self._llm_backend.decode(effective_context_tokens)
 
-        logprobs = self._log_softmax(self._llm_backend.last_logits())
-        candidates = candidate_generator(logprobs)
+        candidates = candidate_generator(self._llm_backend.last_logits())
 
         prev_prob_values = list(prev_probs) if prev_probs is not None else []
 
@@ -956,8 +937,8 @@ class Model:
                     depth, n, rng=method_rng,
                 ),
                 base_live_state=pre_adjust_state,
-                query_next_ids_from_live=lambda n: self._top_k_ids_from_logprobs(
-                    self._log_softmax(self._llm_backend.last_logits()),
+                query_next_ids_from_live=lambda n: self._top_k_ids_from_logits(
+                    self._llm_backend.last_logits(),
                     n,
                 ),
                 save_live_state=self.save_live_state,

@@ -10,7 +10,7 @@ from problm_solver.samplers import (
     BeamSampler,
     BranchSampler,
     MetropolisSampler,
-    SampleLowTemp,
+    SampleLowTempNucleus,
     SamplePowerDist,
     SamplerContext,
     adjust_identity,
@@ -121,25 +121,25 @@ class TestAdjustIdentity:
 # ---------------------------------------------------------------------------
 
 class TestSampleLowTempInit:
-    """Tests for SampleLowTemp.__init__."""
+    """Tests for SampleLowTempNucleus.__init__."""
 
     def test_stores_alpha(self) -> None:
         """Alpha is stored as an instance attribute."""
-        assert SampleLowTemp(alpha=2).alpha == 2
+        assert SampleLowTempNucleus(alpha=2).alpha == 2
 
     def test_different_alpha_values_stored(self) -> None:
         """Different alpha values are stored independently."""
-        adj1, adj2 = SampleLowTemp(alpha=1), SampleLowTemp(alpha=3)
+        adj1, adj2 = SampleLowTempNucleus(alpha=1), SampleLowTempNucleus(alpha=3)
         assert adj1.alpha == 1
         assert adj2.alpha == 3
 
     def test_is_callable(self) -> None:
-        """SampleLowTemp instances are callable."""
-        assert callable(SampleLowTemp(alpha=2))
+        """SampleLowTempNucleus instances are callable."""
+        assert callable(SampleLowTempNucleus(alpha=2))
 
     def test_satisfies_adjust_fn_signature(self, basic_context: SamplerContext) -> None:
-        """SampleLowTemp instances satisfy the AdjustFn interface."""
-        assert isinstance(SampleLowTemp(alpha=2)(basic_context).candidate_ids, np.ndarray)
+        """SampleLowTempNucleus instances satisfy the AdjustFn interface."""
+        assert isinstance(SampleLowTempNucleus(alpha=2)(basic_context).candidate_ids, np.ndarray)
 
 
 # ---------------------------------------------------------------------------
@@ -147,38 +147,38 @@ class TestSampleLowTempInit:
 # ---------------------------------------------------------------------------
 
 class TestSampleLowTempCall:
-    """Tests for SampleLowTemp.__call__."""
+    """Tests for SampleLowTempNucleus.__call__."""
 
     @pytest.fixture
-    def adj(self) -> SampleLowTemp:
-        """Return a SampleLowTemp instance with alpha=2."""
-        return SampleLowTemp(alpha=2)
+    def adj(self) -> SampleLowTempNucleus:
+        """Return a SampleLowTempNucleus instance with alpha=2."""
+        return SampleLowTempNucleus(alpha=2)
 
-    def test_returns_candidate_tokens(self, adj: SampleLowTemp, basic_context: SamplerContext) -> None:
+    def test_returns_candidate_tokens(self, adj: SampleLowTempNucleus, basic_context: SamplerContext) -> None:
         """__call__() returns CandidateTokens."""
         assert len(adj(basic_context).candidate_ids) == 2
 
     def test_output_ids_match_input_ids(
-        self, adj: SampleLowTemp, basic_context: SamplerContext
+        self, adj: SampleLowTempNucleus, basic_context: SamplerContext
     ) -> None:
         """The returned candidates have the same token IDs as input."""
         assert adj(basic_context).candidate_ids.tolist() == basic_context.token_id_probs.candidate_ids.tolist()
 
     def test_output_values_are_floats(
-        self, adj: SampleLowTemp, basic_context: SamplerContext
+        self, adj: SampleLowTempNucleus, basic_context: SamplerContext
     ) -> None:
         """All values in the returned distribution are floats."""
         assert adj(basic_context).candidate_logprobs.dtype == np.float64
 
     def test_empty_prev_probs_gives_finite_output(
-        self, adj: SampleLowTemp, basic_context: SamplerContext
+        self, adj: SampleLowTempNucleus, basic_context: SamplerContext
     ) -> None:
         """With no previous tokens, output log-probs are finite for non-zero probs."""
         assert np.all(np.isfinite(adj(basic_context).candidate_logprobs))
 
     def test_prev_probs_does_not_change_output(
         self,
-        adj: SampleLowTemp,
+        adj: SampleLowTempNucleus,
         basic_context: SamplerContext,
         context_with_prev: SamplerContext,
     ) -> None:
@@ -193,7 +193,7 @@ class TestSampleLowTempCall:
         assert np.allclose(out_a.candidate_logprobs, out_b.candidate_logprobs)
 
     def test_relative_order_preserved_with_empty_prev_probs(
-        self, adj: SampleLowTemp
+        self, adj: SampleLowTempNucleus
     ) -> None:
         """With no previous tokens, the most likely token remains most likely."""
         ctx = SamplerContext(
@@ -215,12 +215,12 @@ class TestSampleLowTempCall:
             query_next_id=MagicMock(),
             query_branch=MagicMock(),
         )
-        result = SampleLowTemp(alpha=1)(ctx)
+        result = SampleLowTempNucleus(alpha=1)(ctx)
         lp = result.candidate_logprobs
         assert lp[0] > lp[1] > lp[2]
 
-    def test_different_alpha_produces_different_output(self) -> None:
-        """Different alpha values produce different adjusted distributions."""
+    def test_alpha_does_not_affect_output(self) -> None:
+        """Alpha is recorded but applied by the candidate generator, not here."""
         ctx = SamplerContext(
             token_id_probs=id_logprobs_to_candidate_tokens({1: -0.2, 2: -1.0}),
             prev_probs=[],
@@ -228,12 +228,12 @@ class TestSampleLowTempCall:
             query_next_id=MagicMock(),
             query_branch=MagicMock(),
         )
-        out1 = SampleLowTemp(alpha=1)(ctx)
-        out3 = SampleLowTemp(alpha=3)(ctx)
-        assert not np.allclose(out1.candidate_logprobs, out3.candidate_logprobs)
+        out1 = SampleLowTempNucleus(alpha=1)(ctx)
+        out3 = SampleLowTempNucleus(alpha=3)(ctx)
+        assert np.allclose(out1.candidate_logprobs, out3.candidate_logprobs)
 
-    def test_matches_exact_power_scaling_without_history(self) -> None:
-        """With empty history, output equals log(exp(lp-lp_max) ** alpha)."""
+    def test_matches_input_logprobs_without_history(self) -> None:
+        """With empty history, output equals the input candidate log-probabilities."""
         ctx = SamplerContext(
             token_id_probs=id_logprobs_to_candidate_tokens({1: -0.2, 2: -1.2}),
             prev_probs=[],
@@ -241,8 +241,8 @@ class TestSampleLowTempCall:
             query_next_id=MagicMock(),
             query_branch=MagicMock(),
         )
-        out = SampleLowTemp(alpha=2.0)(ctx)
-        assert out.candidate_logprobs.tolist() == pytest.approx([0.0, -2.0])
+        out = SampleLowTempNucleus(alpha=2.0)(ctx)
+        assert out.candidate_logprobs.tolist() == pytest.approx([-0.2, -1.2])
 
     def test_history_does_not_shift_output(self) -> None:
         """The selection history contributes no constant shift to the output.
@@ -250,8 +250,9 @@ class TestSampleLowTempCall:
         Previously ``alpha * sum(log(prev_probs))`` was added to every
         candidate; that term is shift-invariant under sampling and only
         polluted stored top-k log-probabilities, so it is no longer applied.
-        The output must therefore equal the pure per-step power scaling
-        regardless of ``prev_probs``.
+        The output must therefore equal the input candidate distribution
+        regardless of ``prev_probs`` (and regardless of ``alpha``, which the
+        candidate generator applies before truncation).
         """
         ctx_empty = SamplerContext(
             token_id_probs=id_logprobs_to_candidate_tokens({1: -0.2, 2: -1.2}),
@@ -267,11 +268,11 @@ class TestSampleLowTempCall:
             query_next_id=MagicMock(),
             query_branch=MagicMock(),
         )
-        out_empty = SampleLowTemp(alpha=2.0)(ctx_empty)
-        out_with_prev = SampleLowTemp(alpha=2.0)(ctx_with_prev)
-        # Pure per-step power scaling: alpha * (lp - lp.max()) == [0.0, -2.0].
-        assert out_empty.candidate_logprobs.tolist() == pytest.approx([0.0, -2.0])
-        assert out_with_prev.candidate_logprobs.tolist() == pytest.approx([0.0, -2.0])
+        out_empty = SampleLowTempNucleus(alpha=2.0)(ctx_empty)
+        out_with_prev = SampleLowTempNucleus(alpha=2.0)(ctx_with_prev)
+        # Pure pass-through: the input distribution is returned unchanged.
+        assert out_empty.candidate_logprobs.tolist() == pytest.approx([-0.2, -1.2])
+        assert out_with_prev.candidate_logprobs.tolist() == pytest.approx([-0.2, -1.2])
         assert np.allclose(out_empty.candidate_logprobs, out_with_prev.candidate_logprobs)
 
     def test_stateful_rolling_matches_full_recompute(self) -> None:
@@ -283,10 +284,10 @@ class TestSampleLowTempCall:
             'query_branch': MagicMock(),
         }
 
-        rolling_adj = SampleLowTemp(alpha=2.0)
+        rolling_adj = SampleLowTempNucleus(alpha=2.0)
         for prev_probs in ([], [0.5], [0.5, 0.25]):
             rolling_out = rolling_adj(SamplerContext(prev_probs=prev_probs, **shared_kwargs))
-            fresh_out = SampleLowTemp(alpha=2.0)(
+            fresh_out = SampleLowTempNucleus(alpha=2.0)(
                 SamplerContext(prev_probs=prev_probs, **shared_kwargs)
             )
             assert rolling_out.candidate_logprobs.tolist() == pytest.approx(
@@ -950,8 +951,8 @@ class TestAdjustFnTypeAlias:
     def test_sample_low_temp_is_valid_adjust_fn(
         self, basic_context: SamplerContext
     ) -> None:
-        """A SampleLowTemp instance satisfies the AdjustFn calling convention."""
-        fn: AdjustFn = SampleLowTemp(alpha=2)
+        """A SampleLowTempNucleus instance satisfies the AdjustFn calling convention."""
+        fn: AdjustFn = SampleLowTempNucleus(alpha=2)
         assert len(fn(basic_context).candidate_ids) > 0
 
     def test_sample_power_dist_is_valid_adjust_fn(

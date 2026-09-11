@@ -96,14 +96,23 @@ def adjust_identity(context: SamplerContext) -> CandidateTokens:
     return context.token_id_probs
 
 
-class SampleLowTemp:
-    """Adjust token log-probabilities by per-step power-scaling (low-temperature sampling).
+class SampleLowTempNucleus:
+    """Labelled pass-through adjustment for low-temperature (power-scaled) sampling.
 
-    At each generation step the current token log-probabilities are multiplied
-    by ``alpha`` (equivalently, the probabilities are raised to ``alpha``),
-    which sharpens the distribution for ``alpha > 1`` and flattens it for
-    ``0 < alpha < 1``. The result is returned as log-probabilities for
-    downstream renormalisation and sampling.
+    Temperature scaling itself now happens inside the candidate generator:
+    ``CandidateGeneratorFactory`` scales the raw logits by ``alpha`` (inverse
+    temperature, ``temperature = 1 / alpha``) BEFORE top-k/top-p truncation,
+    matching HuggingFace ``transformers``' warper order
+    (``TemperatureLogitsWarper``, then ``TopKLogitsWarper``, then
+    ``TopPLogitsWarper``). The candidates received by this adjustment have
+    therefore already been temperature-scaled and truncated, and this class
+    returns them unchanged.
+
+    It is retained as a named class so that ``generate_with_sampler`` records
+    a meaningful ``sampling_method`` label ('SampleLowTempNucleus') for
+    low-temperature runs, and so the low-temperature API keeps a stable
+    surface. It must not apply any scaling itself: doing so would apply the
+    temperature a second time.
 
     The selection history (``prev_probs``) is deliberately *not* folded into
     the output. An earlier version added ``alpha * sum(log(prev_probs))`` to
@@ -113,40 +122,30 @@ class SampleLowTemp:
     effect on which token is selected or on the stored per-token
     probabilities. Its only observable effect was to inject a steadily growing
     negative offset into the top-k log-probability map stored in
-    ``LLMOutputDataFull.response_topk`` (drifting to ~``-alpha * n * mean_logprob``
-    by the end of a long generation). Omitting it keeps the stored log-probabilities
-    on a stable, interpretable scale without altering the sampling rigidity,
-    which is governed solely by the per-step ``alpha * lp`` scaling.
+    ``LLMOutputDataFull.response_topk``. Omitting it keeps the stored
+    log-probabilities on a stable, interpretable scale.
 
-    :param alpha: Scaling exponent. Values greater than 1 sharpen the
-        distribution (favoring already-likely tokens); values between 0
-        and 1 flatten it.
+    :param alpha: The inverse temperature used by the run. Recorded for
+        reference only; the scaling itself is performed by the candidate
+        generator.
 
     Example usage::
 
-        adjust_fn = SampleLowTemp(alpha=2)
+        adjust_fn = SampleLowTempNucleus(alpha=2)
         result = adjust_fn(context)
     """
 
     def __init__(self, alpha: float) -> None:
-        """Initialize with scaling exponent.
+        """Initialize with the run's inverse temperature.
 
-        :param alpha: Exponent applied to the current token probabilities
-            when computing the adjustment.
+        :param alpha: Inverse temperature of the run. Recorded for reference;
+            applied by the candidate generator, not here.
         """
         self.alpha = alpha
 
     def __call__(self, context: SamplerContext) -> CandidateTokens:
-        """Apply per-step power-scaling adjustment to the current token-ID distribution."""
-        candidate_ids = context.token_id_probs.candidate_ids
-        lp = context.token_id_probs.candidate_logprobs.astype(np.float64, copy=True)
-        lp -= lp.max()
-
-        new_logprobs: npt.NDArray[np.float64] = self.alpha * lp
-        return CandidateTokens(
-            candidate_ids=candidate_ids.astype(np.int32, copy=False),
-            candidate_logprobs=new_logprobs,
-        )
+        """Pass the temperature-scaled, truncated candidate distribution through unchanged."""
+        return context.token_id_probs
 
 
 class BranchSampler(ABC):

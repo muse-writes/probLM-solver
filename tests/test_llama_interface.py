@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, call, patch
 import numpy as np
 import pytest
 
+from problm_solver.candidates import log_softmax
 from problm_solver.data import LLMNextTokenData, LLMOutputData, LLMOutputDataFull
 from problm_solver.samplers import id_logprobs_to_candidate_tokens
 
@@ -261,13 +262,11 @@ class TestModelQueryLogProbs:
 
     def test_probs_are_exp_of_sampled_token_logprobs(self, low_level_model) -> None:
         """Each probability equals exp(log-prob) of the corresponding sampled token."""
-        from problm_solver.llama_interface import Model
-
         mock_rng = MagicMock()
         mock_rng.gumbel.return_value = np.zeros(4)
         with patch('problm_solver.llama_interface.resolve_rng', return_value=mock_rng):
             result = low_level_model.query_log_probs()
-        lp = Model._log_softmax(np.array([0.0, 3.0, 1.0, -2.0], dtype=np.float32))
+        lp = log_softmax(np.array([0.0, 3.0, 1.0, -2.0], dtype=np.float32))
         assert result.probs == pytest.approx([float(np.exp(lp[1]))])
 
     def test_probs_are_between_zero_and_one(self, low_level_model) -> None:
@@ -407,15 +406,13 @@ class TestModelQueryBranch:
 
     def test_sums_log_probs_of_generated_tokens(self, branch_model) -> None:
         """Return value equals the sum of log-probs of the sampled tokens."""
-        from problm_solver.llama_interface import Model
-
         # With Gumbel noise = 0, sampling is greedy: argmax of logprobs.
         # Step 1: scores[2], argmax = 1 (logit 3.0)
         # Step 2: scores[3], argmax = 2 (logit 2.0)
-        lp1 = float(Model._log_softmax(
+        lp1 = float(log_softmax(
             np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
         )[1])
-        lp2 = float(Model._log_softmax(
+        lp2 = float(log_softmax(
             np.array([0.5, 0.5, 2.0, 0.2, -2.0], dtype=np.float32)
         )[2])
         mock_rng = MagicMock()
@@ -435,11 +432,9 @@ class TestModelQueryBranch:
 
     def test_eos_log_prob_not_included_in_sum(self, branch_model) -> None:
         """The log-probability of the EOS token itself is not added to the total."""
-        from problm_solver.llama_interface import Model
-
         # Step 1 generates token 1 (non-EOS); step 2 generates EOS.
         branch_model._llm.scores[3] = [-10.0, -10.0, -10.0, -10.0, 10.0]  # EOS argmax
-        lp1 = float(Model._log_softmax(
+        lp1 = float(log_softmax(
             np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
         )[1])
         mock_rng = MagicMock()
@@ -574,12 +569,10 @@ class TestModelQueryBranchesFromLiveBatch:
 
     def test_sums_log_probs_of_generated_tokens(self, batch_model) -> None:
         """Each branch's log-prob equals the sum of per-step sampled log-probs."""
-        from problm_solver.llama_interface import Model
-
-        lp1 = float(Model._log_softmax(
+        lp1 = float(log_softmax(
             np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
         )[1])
-        lp2 = float(Model._log_softmax(
+        lp2 = float(log_softmax(
             np.array([0.5, 0.5, 2.0, 0.2, -2.0], dtype=np.float32)
         )[2])
         with patch('problm_solver.llama_interface.resolve_rng',
@@ -600,15 +593,13 @@ class TestModelQueryBranchesFromLiveBatch:
 
     def test_stops_at_max_tokens_without_eos(self, batch_model) -> None:
         """A full-depth run with no EOS sums exactly max_tokens log-probs."""
-        from problm_solver.llama_interface import Model
-
-        lp1 = float(Model._log_softmax(
+        lp1 = float(log_softmax(
             np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
         )[1])
-        lp2 = float(Model._log_softmax(
+        lp2 = float(log_softmax(
             np.array([0.5, 0.5, 2.0, 0.2, -2.0], dtype=np.float32)
         )[2])
-        lp3 = float(Model._log_softmax(
+        lp3 = float(log_softmax(
             np.array([2.0, 0.5, 0.5, 0.2, -2.0], dtype=np.float32)
         )[0])
         with patch('problm_solver.llama_interface.resolve_rng',
@@ -626,11 +617,9 @@ class TestModelQueryBranchesFromLiveBatch:
         instead asserts the accumulated value is just step-0's log-prob when
         step 1 is EOS.
         """
-        from problm_solver.llama_interface import Model
-
         # step 1 (position 3) argmax = EOS
         batch_model._llm.scores[3] = [-10.0, -10.0, -10.0, -10.0, 10.0]
-        lp1 = float(Model._log_softmax(
+        lp1 = float(log_softmax(
             np.array([0.5, 3.0, 1.5, 0.2, -2.0], dtype=np.float32)
         )[1])
         with patch('problm_solver.llama_interface.resolve_rng',
@@ -840,124 +829,112 @@ class TestFormatChatPrompt:
 
 
 class TestLogSoftmax:
-    """Tests for Model._log_softmax."""
+    """Tests for log_softmax."""
 
     def test_output_is_valid_log_probability_distribution(self) -> None:
         """exp(log_softmax(x)) sums to 1.0 over the full vocabulary."""
-        from problm_solver.llama_interface import Model
-
         logits = np.array([1.0, 2.0, 0.5, -1.0], dtype=np.float32)
-        result = Model._log_softmax(logits)
+        result = log_softmax(logits)
         assert np.exp(result).sum() == pytest.approx(1.0)
 
     def test_argmax_is_preserved(self) -> None:
         """The token with the highest logit has the highest log-probability."""
-        from problm_solver.llama_interface import Model
-
         logits = np.array([0.1, 3.0, -1.0, 0.5], dtype=np.float32)
-        result = Model._log_softmax(logits)
+        result = log_softmax(logits)
         assert np.argmax(result) == np.argmax(logits)
 
     def test_all_values_are_non_positive(self) -> None:
         """All log-probabilities are ≤ 0 (probabilities are in (0, 1])."""
-        from problm_solver.llama_interface import Model
-
         logits = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        result = Model._log_softmax(logits)
+        result = log_softmax(logits)
         assert np.all(result <= 0.0)
 
     def test_returns_float64_array(self) -> None:
         """Output dtype is float64 regardless of the input dtype."""
-        from problm_solver.llama_interface import Model
-
         logits = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        result = Model._log_softmax(logits)
+        result = log_softmax(logits)
         assert result.dtype == np.float64
 
     def test_output_shape_matches_input(self) -> None:
         """Output array has the same shape as the input logits."""
-        from problm_solver.llama_interface import Model
-
         logits = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float32)
-        result = Model._log_softmax(logits)
+        result = log_softmax(logits)
         assert result.shape == logits.shape
 
     def test_numerically_stable_with_large_logits(self) -> None:
         """Does not overflow when logits are in the hundreds, as is common for LLMs."""
-        from problm_solver.llama_interface import Model
-
         logits = np.array([300.0, 200.0, 100.0], dtype=np.float32)
-        result = Model._log_softmax(logits)
+        result = log_softmax(logits)
         assert np.all(np.isfinite(result))
         assert np.exp(result).sum() == pytest.approx(1.0)
 
     def test_uniform_logits_produce_equal_log_probs(self) -> None:
         """All-equal logits map to the same log-probability for every token."""
-        from problm_solver.llama_interface import Model
-
         logits = np.full(5, 2.0, dtype=np.float32)
-        result = Model._log_softmax(logits)
+        result = log_softmax(logits)
         assert np.allclose(result, result[0])
 
 
-class TestTopKIdsFromLogprobs:
-    """Tests for Model._top_k_ids_from_logprobs."""
+class TestTopKIdsFromLogits:
+    """Tests for Model._top_k_ids_from_logits."""
 
     def test_returns_exactly_n_entries(self, model) -> None:
         """The returned list has exactly n entries."""
-        logprobs = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float64)
-        result = model._top_k_ids_from_logprobs(logprobs, n=3)
+        logits = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float32)
+        result = model._top_k_ids_from_logits(logits, n=3)
         assert len(result) == 3
 
     def test_contains_highest_logprob_tokens(self, model) -> None:
         """Result contains the n token IDs with the highest log-probabilities."""
-        logprobs = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float64)
-        result = model._top_k_ids_from_logprobs(logprobs, n=2)
+        logits = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float32)
+        result = model._top_k_ids_from_logits(logits, n=2)
         ids = [idx for idx, _ in result]
         assert ids == [2, 1]
 
     def test_excludes_lower_logprob_tokens(self, model) -> None:
         """Token IDs outside the top-n are not present in the result."""
-        logprobs = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float64)
-        result = model._top_k_ids_from_logprobs(logprobs, n=2)
+        logits = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float32)
+        result = model._top_k_ids_from_logits(logits, n=2)
         ids = {idx for idx, _ in result}
         assert ids == {1, 2}
 
     def test_values_match_logprobs_of_their_tokens(self, model) -> None:
         """Each tuple value equals the log-probability at the corresponding vocab index."""
-        logprobs = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float64)
-        result = model._top_k_ids_from_logprobs(logprobs, n=3)
+        logits = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float32)
+        expected = log_softmax(logits)
+        result = model._top_k_ids_from_logits(logits, n=3)
         assert [idx for idx, _ in result] == [2, 1, 3]
-        assert result[0][1] == pytest.approx(-0.5)
-        assert result[1][1] == pytest.approx(-1.0)
-        assert result[2][1] == pytest.approx(-2.0)
+        assert result[0][1] == pytest.approx(float(expected[2]))
+        assert result[1][1] == pytest.approx(float(expected[1]))
+        assert result[2][1] == pytest.approx(float(expected[3]))
 
     def test_values_are_python_floats(self, model) -> None:
         """All returned log-probs are plain Python floats, not numpy scalars."""
-        logprobs = np.array([-1.0, -2.0, -3.0], dtype=np.float64)
-        result = model._top_k_ids_from_logprobs(logprobs, n=2)
+        logits = np.array([-1.0, -2.0, -3.0], dtype=np.float32)
+        result = model._top_k_ids_from_logits(logits, n=2)
         assert all(type(v) is float for _, v in result)
 
     def test_sorted_descending_by_log_prob(self, model) -> None:
         """Entries are ordered from highest to lowest log-probability."""
-        logprobs = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float64)
-        result = model._top_k_ids_from_logprobs(logprobs, n=3)
+        logits = np.array([-3.0, -1.0, -0.5, -2.0, -4.0], dtype=np.float32)
+        result = model._top_k_ids_from_logits(logits, n=3)
         values = [v for _, v in result]
         assert values == sorted(values, reverse=True)
 
     def test_n_clamped_to_vocab_size(self, model) -> None:
         """Requesting more tokens than vocab size returns every token."""
-        logprobs = np.array([-1.0, -2.0, -3.0], dtype=np.float64)
-        result = model._top_k_ids_from_logprobs(logprobs, n=100)
+        logits = np.array([-1.0, -2.0, -3.0], dtype=np.float32)
+        result = model._top_k_ids_from_logits(logits, n=100)
         assert len(result) == 3
 
     def test_n_of_one_returns_single_highest_token(self, model) -> None:
         """n=1 returns only the argmax token with its log-probability."""
-        logprobs = np.array([-3.0, -0.1, -2.0], dtype=np.float64)
-        result = model._top_k_ids_from_logprobs(logprobs, n=1)
+        logits = np.array([-3.0, -0.1, -2.0], dtype=np.float32)
+        expected = log_softmax(logits)
+        result = model._top_k_ids_from_logits(logits, n=1)
         assert len(result) == 1
         assert result[0][0] == 1
-        assert result[0][1] == pytest.approx(-0.1)
+        assert result[0][1] == pytest.approx(float(expected[1]))
 
 
 @pytest.fixture
@@ -1041,12 +1018,10 @@ class TestGenerateWithSampler:
 
     def test_adjust_fn_receives_top_k_tokens(self, gen_smpl_model) -> None:
         """adjust_fn receives a SamplerContext whose token_probs is built from scores."""
-        from problm_solver.llama_interface import Model
-
         adjust_fn = MagicMock(return_value=id_logprobs_to_candidate_tokens({1: -0.5}))
         gen_smpl_model.generate_with_sampler(top_k=2, top_p=1.0, adjust_fn=adjust_fn, max_tokens=1)
         ctx = adjust_fn.call_args[0][0]
-        lp = Model._log_softmax(np.array([-10.0, 3.0, 1.0, 0.5], dtype=np.float32))
+        lp = log_softmax(np.array([-10.0, 3.0, 1.0, 0.5], dtype=np.float32))
         assert ctx.token_id_probs.candidate_ids.tolist() == [1, 2]
         assert ctx.token_id_probs.candidate_logprobs.tolist() == pytest.approx([float(lp[1]), float(lp[2])])
 
@@ -1178,6 +1153,7 @@ class TestSampleToken:
             result = one_step_model.sample_token(
                 top_k=2,
                 top_p=1.0,
+                alpha=1.0,
                 adjust_fn=lambda ctx: ctx.token_id_probs,
                 use_live_state=True,
                 commit_token=False,
@@ -1197,6 +1173,7 @@ class TestSampleToken:
             result = one_step_model.sample_token(
                 top_k=2,
                 top_p=1.0,
+                alpha=1.0,
                 adjust_fn=lambda ctx: ctx.token_id_probs,
                 use_live_state=True,
                 commit_token=False,
@@ -1216,6 +1193,7 @@ class TestSampleToken:
             result = one_step_model.sample_token(
                 top_k=2,
                 top_p=1.0,
+                alpha=1.0,
                 adjust_fn=lambda ctx: ctx.token_id_probs,
                 use_live_state=False,
                 context_tokens=[7, 8],
@@ -1244,6 +1222,7 @@ class TestSampleToken:
             result = one_step_model.sample_token(
                 top_k=2,
                 top_p=1.0,
+                alpha=1.0,
                 adjust_fn=adjust_fn,
                 use_live_state=False,
                 commit_token=False,
@@ -1278,6 +1257,7 @@ class TestSampleToken:
             result = one_step_model.sample_token(
                 top_k=2,
                 top_p=1.0,
+                alpha=1.0,
                 adjust_fn=lambda ctx: ctx.token_id_probs,
                 commit_token=False,
             )
@@ -1293,6 +1273,7 @@ class TestSampleToken:
             result = one_step_model.sample_token(
                 top_k=2,
                 top_p=1.0,
+                alpha=1.0,
                 adjust_fn=lambda ctx: ctx.token_id_probs,
             )
 
@@ -1309,6 +1290,7 @@ class TestSampleToken:
         result = one_step_model.sample_token(
             top_k=1,
             top_p=1.0,
+            alpha=1.0,
             adjust_fn=lambda ctx: ctx.token_id_probs,
         )
 

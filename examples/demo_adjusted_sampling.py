@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from problm_solver.samplers import SampleLowTemp, adjust_identity
 from problm_solver.llama_interface import Model
+from problm_solver.samplers import SampleLowTempNucleus, adjust_identity
 
 MODEL = Path.home() / '.problm-solver' / 'models' / 'Qwen3.5-0.8B-Q4_K_M.gguf'
 PROMPT = 'Why is the sky blue?'
@@ -25,11 +25,11 @@ identity = model.generate_with_sampler(
 
 low_temp = model.generate_with_sampler(
     top_k=TOP_K, top_p=TOP_P,
-    adjust_fn=SampleLowTemp(alpha=ALPHA),
+    adjust_fn=SampleLowTempNucleus(alpha=ALPHA),
     max_tokens=MAX_TOKENS, alpha=ALPHA, sampling_method='LowTemp',
 )
 
-for label, data in (('adjust_identity', identity), ('SampleLowTemp', low_temp)):
+for label, data in (('adjust_identity', identity), ('SampleLowTempNucleus', low_temp)):
     tokens, probs = data.response_probabilities
     mean = sum(probs) / len(probs) if probs else 0.0
     print(f'\n=== {label} ===')

@@ -13,7 +13,7 @@ from problm_solver.llama_interface import Model
 from problm_solver.samplers import (
     BeamSampler,
     MetropolisSampler,
-    SampleLowTemp,
+    SampleLowTempNucleus,
     SamplePowerDist,
     adjust_identity,
 )
@@ -190,7 +190,7 @@ def ui_generate_low_temp(model: Model, model_path: Path) -> None:
     """Handle user interface for getting model response using low temp sampling."""
     print('\nGenerating output from low-temp sampling.')
     alpha = float(input('Please input the value of alpha, as a float: '))
-    sampling_fn = SampleLowTemp(alpha=alpha)
+    sampling_fn = SampleLowTempNucleus(alpha=alpha)
     top_k = int(input(
         'Please input the number of most probable token candidates (M) to consider at each step: '
     ))
