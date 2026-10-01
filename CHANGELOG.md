@@ -1,3 +1,16 @@
+## v1.7.1 (2026-10-01)
+
+### BREAKING CHANGE
+
+- `SampleLowTemp` behaviour now reproduced exclusively
+with the `alpha` parameter in `Model.generate_with_sampler` and
+`Model.sample_token`. Update all scripts accordingly.
+
+### Fix
+
+- Harmonised tandem top-p and top-k behaviour with other libraries.
+- temperature is now a base sampling parameter
+
 ## v1.7.0 (2026-09-10)
 
 ### BREAKING CHANGE
